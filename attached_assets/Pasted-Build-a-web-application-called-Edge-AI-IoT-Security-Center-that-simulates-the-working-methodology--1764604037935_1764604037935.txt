@@ -1,0 +1,175 @@
+Build a web application called ‘Edge AI IoT Security Center’ that simulates the working methodology described below. The app should have a clean, responsive dashboard layout and use mocked data (no real hardware).
+
+Overall goals:
+
+Monitor IoT devices on a local network.
+
+Simulate edge AI anomaly detection and automatic quarantine.
+
+Provide an admin dashboard with full control and logs.
+
+Pages/sections required:
+
+Login Page
+
+Simple admin login screen (email + password).
+
+After successful login, redirect to the main Dashboard.
+
+Main Dashboard (Home)
+
+Top summary cards:
+
+Total Devices
+
+New Devices Pending Approval
+
+Active Alerts
+
+Quarantined Devices
+
+A line/bar chart showing ‘Network Traffic per Device’ over time using mock data.
+
+A table listing all devices with columns:
+
+Device Name
+
+IP Address
+
+Status (New / Approved / Monitoring / Quarantined)
+
+Last Seen Time
+
+Clicking a device row opens a detail panel.
+
+Device Identification & Onboarding Page
+
+Table or list of ‘New / Unapproved Devices’.
+
+Each row shows:
+
+Device Name / ID
+
+MAC Address
+
+IP Address
+
+First Seen Time
+
+Buttons:
+
+‘Approve Device’ → moves device to Approved list and starts baseline learning.
+
+‘Reject Device’ → removes or marks the device as Blocked.
+
+Option to simulate discovery of a new device (‘Add Simulated Device’ button that creates a random device entry).
+
+Monitoring & Data Collection Page
+
+For each Approved device, show:
+
+Current traffic rate (packets/sec – simulated)
+
+Average traffic rate (baseline)
+
+Protocol usage distribution (HTTP, MQTT, etc.) in a small chart.
+
+Display a timeline or log of recent packets/requests (mocked events).
+
+Anomaly Detection & Alerts Page
+
+Table of active and historical alerts with fields:
+
+Timestamp
+
+Device Name
+
+Anomaly Type (High traffic, Unknown IP, Port scan, etc.)
+
+Severity (Low / Medium / High)
+
+Status (Open / Acknowledged / Resolved)
+
+Simulate anomaly scores (0–1) and highlight rows with scores above 0.8.
+
+Button ‘Generate Simulated Alert’ to create random alerts and demonstrate the workflow.
+
+Quarantine Management Page
+
+List of all Quarantined devices.
+
+Fields:
+
+Device Name
+
+Reason for Quarantine
+
+Time Quarantined
+
+Actions per device:
+
+‘Release Device’ → moves device back to Approved/Monitoring.
+
+‘Block Permanently’ → marks as Blocked and prevents re-joining.
+
+Show a short description at the top explaining that quarantine is triggered automatically for High severity anomalies.
+
+Logs & Audit Trail Page
+
+Table showing all important events:
+
+Timestamp
+
+Event Type (Device Approved, Device Rejected, Anomaly Detected, Device Quarantined, Device Released, Login)
+
+Performed By (System / Admin)
+
+Notes/Details
+
+Filters for date range and event type.
+
+Settings Page
+
+Controls to configure:
+
+Anomaly sensitivity (slider: Low, Medium, High).
+
+Alert refresh interval (in seconds).
+
+Theme (Light / Dark).
+
+These settings should affect how often simulated alerts appear and how strict anomaly detection behaves (you can adjust thresholds in code based on these values).
+
+Behavior & data:
+
+Use in-memory or simple database collections such as:
+
+devices
+
+alerts
+
+quarantine
+
+logs
+
+Pre-populate with sample devices like:
+
+Camera-01, Sensor-01, DoorLock-01, SmartBulb-01.
+
+Periodically (every few seconds) update some device metrics and randomly generate alerts to give a ‘live system’ feeling.
+
+Non-functional requirements:
+
+Responsive layout for desktop and tablet.
+
+Clear color-coding:
+
+Green for normal devices.
+
+Yellow for ‘Monitoring / Suspicious’.
+
+Red for ‘Quarantined / High Severity’.
+
+Simple, clean UI suitable for an academic B.Tech project demo.
+
+Use this description to generate all necessary UI components, mock data logic, navigation, and basic state management so that I can later replace the simulated logic with actual Raspberry Pi and AI model integrations.
