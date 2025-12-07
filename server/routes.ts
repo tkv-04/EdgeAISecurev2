@@ -447,7 +447,7 @@ export async function registerRoutes(
       anomalySensitivity: z.enum(["low", "medium", "high"]).optional(),
       alertRefreshInterval: z.number().optional(),
       theme: z.enum(["light", "dark"]).optional(),
-      learningDurationSeconds: z.number().optional(),
+      learningDurationSeconds: z.number().min(10).max(86400).optional(), // 10 seconds to 1 day
     });
 
     const parsed = schema.safeParse(req.body);

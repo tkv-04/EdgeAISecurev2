@@ -86,35 +86,33 @@ export default function SettingsPage() {
     setHasChanges(false);
   };
 
-  const isUsingDefaultLearningDuration =
-    !localSettings.learningDurationSeconds ||
-    localSettings.learningDurationSeconds === 60;
-
-  const handleLearningDurationModeChange = (mode: "default" | "custom") => {
-    if (mode === "default") {
-      setLocalSettings((prev) => ({ ...prev, learningDurationSeconds: 60 }));
-    } else {
-      setLocalSettings((prev) => ({
-        ...prev,
-        learningDurationSeconds:
-          prev.learningDurationSeconds && prev.learningDurationSeconds !== 60
-            ? prev.learningDurationSeconds
-            : 120,
-      }));
-    }
-    setHasChanges(true);
-  };
-
   const handleLearningDurationChange = (value: string) => {
     const parsed = parseInt(value, 10);
     if (Number.isNaN(parsed)) return;
-    const clamped = Math.max(10, Math.min(600, parsed)); // 10s–10min
+    const clamped = Math.max(10, Math.min(86400, parsed)); // 10s–24 hours (1 day)
     setLocalSettings((prev) => ({
       ...prev,
       learningDurationSeconds: clamped,
     }));
     setHasChanges(true);
   };
+
+  const formatDuration = (seconds: number): string => {
+    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+    return `${Math.floor(seconds / 86400)}d`;
+  };
+
+  const LEARNING_PRESETS = [
+    { label: "1 minute", value: 60 },
+    { label: "5 minutes", value: 300 },
+    { label: "15 minutes", value: 900 },
+    { label: "1 hour", value: 3600 },
+    { label: "6 hours", value: 21600 },
+    { label: "12 hours", value: 43200 },
+    { label: "1 day", value: 86400 },
+  ];
 
   const handleReset = () => {
     const defaultSettings: Settings = {
@@ -211,48 +209,58 @@ export default function SettingsPage() {
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <Label htmlFor="learning-duration">Baseline Learning Time</Label>
-                <span className="text-xs text-muted-foreground">
-                  {localSettings.learningDurationSeconds ?? 60} seconds
+                <span className="text-sm font-medium text-muted-foreground">
+                  {formatDuration(localSettings.learningDurationSeconds ?? 60)}
                 </span>
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={isUsingDefaultLearningDuration ? "default" : "outline"}
-                  onClick={() => handleLearningDurationModeChange("default")}
-                  data-testid="button-learning-default"
-                >
-                  Default (60s)
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={!isUsingDefaultLearningDuration ? "default" : "outline"}
-                  onClick={() => handleLearningDurationModeChange("custom")}
-                  data-testid="button-learning-custom"
-                >
-                  Custom
-                </Button>
-                {!isUsingDefaultLearningDuration && (
-                  <div className="flex items-center gap-2">
-                    <Input
-                      id="learning-duration"
-                      type="number"
-                      min={10}
-                      max={600}
-                      value={localSettings.learningDurationSeconds ?? 60}
-                      onChange={(e) => handleLearningDurationChange(e.target.value)}
-                      className="w-24"
-                      data-testid="input-learning-duration"
-                    />
-                    <span className="text-xs text-muted-foreground">seconds (10–600)</span>
-                  </div>
-                )}
+              <div className="space-y-2">
+                <div className="flex flex-wrap gap-2">
+                  {LEARNING_PRESETS.map((preset) => {
+                    const isSelected =
+                      (localSettings.learningDurationSeconds ?? 60) === preset.value;
+                    return (
+                      <Button
+                        key={preset.value}
+                        type="button"
+                        size="sm"
+                        variant={isSelected ? "default" : "outline"}
+                        onClick={() => {
+                          setLocalSettings((prev) => ({
+                            ...prev,
+                            learningDurationSeconds: preset.value,
+                          }));
+                          setHasChanges(true);
+                        }}
+                        data-testid={`button-learning-preset-${preset.value}`}
+                      >
+                        {preset.label}
+                      </Button>
+                    );
+                  })}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="learning-duration-custom" className="text-xs text-muted-foreground">
+                    Custom:
+                  </Label>
+                  <Input
+                    id="learning-duration-custom"
+                    type="number"
+                    min={10}
+                    max={86400}
+                    value={localSettings.learningDurationSeconds ?? 60}
+                    onChange={(e) => handleLearningDurationChange(e.target.value)}
+                    className="w-32"
+                    placeholder="seconds"
+                    data-testid="input-learning-duration"
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    (10s–86400s / 1 day)
+                  </span>
+                </div>
               </div>
               <p className="text-xs text-muted-foreground">
                 Controls how long newly approved devices stay in the learning phase before being marked
-                as fully approved.
+                as fully approved. Longer durations allow for more comprehensive baseline behavior analysis.
               </p>
             </div>
           </CardContent>
