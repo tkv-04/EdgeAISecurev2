@@ -11,6 +11,7 @@ import {
   Wifi,
   BookOpen,
   ListChecks,
+  Ban,
 } from "lucide-react";
 import {
   Sidebar,
@@ -63,6 +64,11 @@ const mainNavItems = [
     title: "Quarantine",
     url: "/quarantine",
     icon: Lock,
+  },
+  {
+    title: "Blocked Devices",
+    url: "/blocked-devices",
+    icon: Ban,
   },
   {
     title: "Logs & Audit",

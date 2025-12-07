@@ -186,8 +186,30 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteDevice(id: number): Promise<boolean> {
-    const result = await db.delete(devices).where(eq(devices.id, id));
-    return true;
+    try {
+      // Verify device exists before attempting deletion
+      const device = await this.getDevice(id);
+      if (!device) {
+        return false;
+      }
+
+      // Delete related records first to avoid foreign key constraint issues
+      await db.delete(alerts).where(eq(alerts.deviceId, id));
+      await db.delete(quarantineRecords).where(eq(quarantineRecords.deviceId, id));
+      await db.delete(trafficData).where(eq(trafficData.deviceId, id));
+      await db.delete(packetEvents).where(eq(packetEvents.deviceId, id));
+      await db.delete(logs).where(eq(logs.deviceId, id));
+      
+      // Now delete the device
+      await db.delete(devices).where(eq(devices.id, id));
+      
+      // Verify deletion was successful
+      const deletedDevice = await this.getDevice(id);
+      return deletedDevice === undefined;
+    } catch (error) {
+      console.error("Error deleting device:", error);
+      return false;
+    }
   }
 
   async startBaselineLearning(deviceId: number): Promise<Device | undefined> {
@@ -492,6 +514,33 @@ export class DatabaseStorage implements IStorage {
       userId = user.id;
     } else {
       userId = existingUser.id;
+    }
+
+    // Create additional admin user (email: tkvfiles@gmail.com, password: 1234)
+    const existingAdmin2 = await this.getUserByEmail("tkvfiles@gmail.com");
+    let admin2UserId: number | null = null;
+    if (!existingAdmin2) {
+      const admin2User = await this.createUser({
+        email: "tkvfiles@gmail.com",
+        name: "Admin User 2",
+        passwordHash: "$2b$10$demo_hash_1234", // In production, use bcrypt
+      });
+      admin2UserId = admin2User.id;
+    } else {
+      admin2UserId = existingAdmin2.id;
+    }
+
+    // Create default settings for admin2 if user was just created
+    if (admin2UserId) {
+      const existingAdmin2Settings = await this.getSettings(admin2UserId);
+      if (!existingAdmin2Settings) {
+        await this.updateSettings(admin2UserId, {
+          anomalySensitivity: "medium",
+          alertRefreshInterval: 30,
+          theme: "light",
+          learningDurationSeconds: 60,
+        });
+      }
     }
 
     // Create default settings

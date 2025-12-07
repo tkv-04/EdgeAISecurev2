@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Wifi, Filter } from "lucide-react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Wifi, Filter, Trash2, Ban } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,19 @@ import {
   DialogDescription,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 import type { Device } from "@shared/schema";
 
 const STATUS_FILTERS: { label: string; value: "all" | "new" | "approved" | "monitoring" | "quarantined" | "blocked" }[] = [
@@ -36,9 +49,67 @@ const STATUS_FILTERS: { label: string; value: "all" | "new" | "approved" | "moni
 export default function AllDevicesPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<(typeof STATUS_FILTERS)[number]["value"]>("all");
+  const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
+  const [blockConfirmationText, setBlockConfirmationText] = useState("");
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const { data: devices, isLoading } = useQuery<Device[]>({
     queryKey: ["/api/devices"],
+  });
+
+  const blockDeviceMutation = useMutation({
+    mutationFn: async (deviceId: number) => {
+      await apiRequest("POST", `/api/devices/${deviceId}/block`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/devices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/logs"] });
+      toast({
+        title: "Device Blocked",
+        description: `${selectedDevice?.name} has been blocked from the network.`,
+      });
+      setSelectedDevice(null);
+      setBlockConfirmationText("");
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to block device. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const deleteDeviceMutation = useMutation({
+    mutationFn: async ({ deviceId, deviceName }: { deviceId: number; deviceName: string }) => {
+      const response = await fetch(`/api/devices/${deviceId}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to delete device");
+      }
+      return { success: true, deviceName };
+    },
+    onSuccess: async (data) => {
+      // Invalidate and refetch queries to ensure UI updates
+      await queryClient.invalidateQueries({ queryKey: ["/api/devices"] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      await queryClient.refetchQueries({ queryKey: ["/api/devices"] });
+      toast({
+        title: "Device removed",
+        description: `${data.deviceName} has been successfully removed from the network.`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to remove device",
+        variant: "destructive",
+      });
+    },
   });
 
   const filteredDevices =
@@ -152,6 +223,7 @@ export default function AllDevicesPage() {
                     <TableHead>Traffic (pps)</TableHead>
                     <TableHead>First Seen</TableHead>
                     <TableHead>Last Seen</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -175,6 +247,54 @@ export default function AllDevicesPage() {
                       <TableCell className="font-mono text-xs text-muted-foreground">
                         {new Date(device.lastSeen).toLocaleString()}
                       </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          {device.status !== "blocked" && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                              onClick={() => {
+                                setSelectedDevice(device);
+                                setBlockConfirmationText("");
+                              }}
+                            >
+                              <Ban className="h-4 w-4" />
+                            </Button>
+                          )}
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                disabled={deleteDeviceMutation.isPending}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Remove Device</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Are you sure you want to remove <strong>{device.name}</strong> from the network?
+                                  This action cannot be undone and all associated data will be permanently deleted.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogAction
+                                  onClick={() => deleteDeviceMutation.mutate({ deviceId: device.id, deviceName: device.name })}
+                                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                  disabled={deleteDeviceMutation.isPending}
+                                >
+                                  {deleteDeviceMutation.isPending ? "Removing..." : "Remove Device"}
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </div>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -183,6 +303,57 @@ export default function AllDevicesPage() {
           )}
         </CardContent>
       </Card>
+
+      <AlertDialog 
+        open={!!selectedDevice && selectedDevice.status !== "blocked"} 
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedDevice(null);
+            setBlockConfirmationText("");
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Block Device</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will block <strong>{selectedDevice?.name}</strong> from the network.
+              The device will not be able to communicate and will be marked as blocked.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="py-4">
+            <label className="text-sm font-medium">
+              Type <strong>&quot;block&quot;</strong> to confirm:
+            </label>
+            <Input
+              value={blockConfirmationText}
+              onChange={(e) => setBlockConfirmationText(e.target.value)}
+              placeholder="Type 'block' to confirm"
+              className="mt-2"
+              autoFocus
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => {
+              setBlockConfirmationText("");
+              setSelectedDevice(null);
+            }}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (selectedDevice) {
+                  blockDeviceMutation.mutate(selectedDevice.id);
+                }
+              }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={blockConfirmationText.toLowerCase() !== "block" || blockDeviceMutation.isPending}
+            >
+              {blockDeviceMutation.isPending ? "Blocking..." : "Block Device"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

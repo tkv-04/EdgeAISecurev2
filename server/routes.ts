@@ -22,14 +22,18 @@ export async function registerRoutes(
     const { email, password } = parsed.data;
     
     // Demo credentials check (in production, verify against hashed password)
-    if (email === "admin@iot.local" && password === "admin123") {
+    const validCredentials = 
+      (email === "admin@iot.local" && password === "admin123") ||
+      (email === "tkvfiles@gmail.com" && password === "1234");
+    
+    if (validCredentials) {
       const user = await storage.getUserByEmail(email);
       
       await storage.createLog({
         timestamp: new Date(),
         eventType: "login",
-        performedBy: "admin",
-        details: "Admin logged in successfully",
+        performedBy: user?.name || "admin",
+        details: `${user?.name || email} logged in successfully`,
       });
       
       res.json({ 
@@ -176,6 +180,34 @@ export async function registerRoutes(
     });
     
     res.json(device);
+  });
+
+  app.delete("/api/devices/:id", async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid device ID" });
+    }
+    const device = await storage.getDevice(id);
+    if (!device) {
+      return res.status(404).json({ error: "Device not found" });
+    }
+    
+    // Create log before deletion (device info is needed)
+    await storage.createLog({
+      timestamp: new Date(),
+      eventType: "device_rejected",
+      performedBy: "admin",
+      deviceId: device.id,
+      deviceName: device.name,
+      details: `Device ${device.name} was removed from the network`,
+    });
+    
+    const deleted = await storage.deleteDevice(id);
+    if (!deleted) {
+      return res.status(500).json({ error: "Failed to delete device" });
+    }
+    
+    res.json({ success: true });
   });
 
   app.post("/api/devices/:id/simulate-attack", async (req, res) => {

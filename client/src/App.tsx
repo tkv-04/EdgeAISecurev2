@@ -19,6 +19,7 @@ import BaselineLearningPage from "@/pages/baseline-learning";
 import MonitoringPage from "@/pages/monitoring";
 import AlertsPage from "@/pages/alerts";
 import QuarantinePage from "@/pages/quarantine";
+import BlockedDevicesPage from "@/pages/blocked-devices";
 import LogsPage from "@/pages/logs";
 import SettingsPage from "@/pages/settings";
 import NotFound from "@/pages/not-found";
@@ -118,6 +119,11 @@ function Router() {
       <Route path="/quarantine">
         <AuthenticatedLayout>
           <ProtectedRoute component={QuarantinePage} />
+        </AuthenticatedLayout>
+      </Route>
+      <Route path="/blocked-devices">
+        <AuthenticatedLayout>
+          <ProtectedRoute component={BlockedDevicesPage} />
         </AuthenticatedLayout>
       </Route>
       <Route path="/logs">
