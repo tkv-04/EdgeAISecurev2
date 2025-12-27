@@ -70,18 +70,36 @@ git clone https://github.com/tkv-04/EdgeAISecurev2.git
 cd EdgeAISecurev2
 npm install
 
-# 2. Install Pi-hole (optional but recommended)
+# 2. Create .env file
+cp .env.example .env
+# Or create manually with:
+cat > .env << EOF
+DATABASE_URL=postgresql://postgres:password@localhost:5432/edgeaisecure
+PORT=5000
+NODE_ENV=development
+EOF
+
+# 3. Install Pi-hole (optional but recommended)
 curl -sSL https://install.pi-hole.net | sudo bash
 sudo pihole setpassword 'your-password'
 
-# 3. Start the app
+# 4. Start the app
 npm run dev
 
-# 4. Open in browser
+# 5. Open in browser
 http://localhost:5000
 ```
 
 **Login:** `admin@iot.local` / `admin123`
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DATABASE_URL` | PostgreSQL connection string | Required for DB mode |
+| `PORT` | Server port | `5000` |
+| `NODE_ENV` | Environment (`development` / `production`) | `development` |
+
 
 ## Configuration
 
