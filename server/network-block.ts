@@ -265,7 +265,76 @@ async function unblockWithPihole(targetIP: string): Promise<boolean> {
 }
 
 /**
- * Block via OpenWRT firewall
+ * OpenWRT ubus API helper - get session token
+ */
+async function openwrtLogin(): Promise<string | null> {
+    if (!settings.openwrtHost || !settings.openwrtUser || !settings.openwrtPassword) {
+        return null;
+    }
+
+    try {
+        const response = await fetch(`http://${settings.openwrtHost}/ubus`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: 1,
+                method: "call",
+                params: [
+                    "00000000000000000000000000000000", // null session for login
+                    "session",
+                    "login",
+                    {
+                        username: settings.openwrtUser,
+                        password: settings.openwrtPassword,
+                    },
+                ],
+            }),
+        });
+
+        const data = await response.json() as any;
+        if (data.result && data.result[0] === 0 && data.result[1]?.ubus_rpc_session) {
+            console.log("[OpenWRT] ✓ Authenticated successfully");
+            return data.result[1].ubus_rpc_session;
+        }
+        console.error("[OpenWRT] Login failed:", data);
+        return null;
+    } catch (error) {
+        console.error("[OpenWRT] Login error:", error);
+        return null;
+    }
+}
+
+/**
+ * OpenWRT ubus API helper - make authenticated call
+ */
+async function openwrtUbus(
+    session: string,
+    path: string,
+    method: string,
+    params: Record<string, any> = {}
+): Promise<any> {
+    const response = await fetch(`http://${settings.openwrtHost}/ubus`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "call",
+            params: [session, path, method, params],
+        }),
+    });
+
+    const data = await response.json() as any;
+    if (data.result && data.result[0] === 0) {
+        return data.result[1] || true;
+    }
+    throw new Error(`ubus call failed: ${JSON.stringify(data)}`);
+}
+
+/**
+ * Block via OpenWRT firewall using ubus API
+ * Creates a firewall rule to drop traffic from the MAC address
  */
 async function blockWithOpenwrt(targetIP: string, targetMAC: string): Promise<boolean> {
     if (!settings.openwrtHost || !settings.openwrtUser || !settings.openwrtPassword) {
@@ -274,27 +343,123 @@ async function blockWithOpenwrt(targetIP: string, targetMAC: string): Promise<bo
     }
 
     try {
-        // OpenWRT LuCI RPC or ubus API call
-        // This is a simplified implementation - real one would use ubus
-        const response = await fetch(
-            `http://${settings.openwrtHost}/cgi-bin/luci/admin/network/firewall/rules`,
-            {
-                method: "POST",
-                headers: {
-                    "Authorization": `Basic ${Buffer.from(`${settings.openwrtUser}:${settings.openwrtPassword}`).toString("base64")}`,
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    action: "drop",
-                    src_mac: targetMAC,
-                    name: `Block-${targetMAC.replace(/:/g, "")}`,
-                }),
-            }
-        );
-        return response.ok;
+        // Step 1: Authenticate
+        const session = await openwrtLogin();
+        if (!session) {
+            return false;
+        }
+
+        console.log(`[OpenWRT] Adding firewall rule to block MAC: ${targetMAC}`);
+
+        // Step 2: Add firewall rule via uci
+        // Create a unique rule name based on MAC
+        const ruleName = `block_${targetMAC.replace(/:/g, "")}`.toLowerCase();
+
+        // Add the rule to firewall config
+        await openwrtUbus(session, "uci", "add", {
+            config: "firewall",
+            type: "rule",
+            name: ruleName,
+            values: {
+                name: ruleName,
+                src: "lan",
+                src_mac: targetMAC.toLowerCase(),
+                dest: "*",
+                target: "DROP",
+                enabled: "1",
+            },
+        });
+
+        // Step 3: Commit the UCI changes
+        await openwrtUbus(session, "uci", "commit", { config: "firewall" });
+
+        // Step 4: Reload firewall to apply changes
+        await openwrtUbus(session, "luci", "setReloadFlag", { flag: "firewall" });
+
+        // Alternative: direct firewall reload
+        try {
+            await openwrtUbus(session, "service", "event", {
+                type: "reload",
+                data: { name: "firewall" },
+            });
+        } catch {
+            // Some OpenWRT versions use different reload method
+            console.log("[OpenWRT] Firewall reload via service failed, trying restart");
+        }
+
+        console.log(`[OpenWRT] ✓ Firewall rule added for ${targetMAC}`);
+        return true;
     } catch (error) {
-        console.error("[NetworkBlock] OpenWRT error:", error);
+        console.error("[OpenWRT] Block error:", error);
         return false;
+    }
+}
+
+/**
+ * Unblock via OpenWRT firewall
+ */
+async function unblockWithOpenwrt(targetMAC: string): Promise<boolean> {
+    if (!settings.openwrtHost || !settings.openwrtUser || !settings.openwrtPassword) {
+        return false;
+    }
+
+    try {
+        const session = await openwrtLogin();
+        if (!session) return false;
+
+        const ruleName = `block_${targetMAC.replace(/:/g, "")}`.toLowerCase();
+        console.log(`[OpenWRT] Removing firewall rule: ${ruleName}`);
+
+        // Find and delete the rule
+        // First, get all firewall rules
+        const rules = await openwrtUbus(session, "uci", "get", {
+            config: "firewall",
+            type: "rule",
+        });
+
+        // Find our rule by name
+        if (rules && rules.values) {
+            for (const [section, values] of Object.entries(rules.values as Record<string, any>)) {
+                if (values.name === ruleName) {
+                    // Delete this section
+                    await openwrtUbus(session, "uci", "delete", {
+                        config: "firewall",
+                        section: section,
+                    });
+                    break;
+                }
+            }
+        }
+
+        // Commit and reload
+        await openwrtUbus(session, "uci", "commit", { config: "firewall" });
+
+        console.log(`[OpenWRT] ✓ Firewall rule removed for ${targetMAC}`);
+        return true;
+    } catch (error) {
+        console.error("[OpenWRT] Unblock error:", error);
+        return false;
+    }
+}
+
+/**
+ * Test OpenWRT connection
+ */
+export async function testOpenwrtConnection(): Promise<{ success: boolean; message: string }> {
+    try {
+        const session = await openwrtLogin();
+        if (!session) {
+            return { success: false, message: "Authentication failed" };
+        }
+
+        // Try to get system info
+        const info = await openwrtUbus(session, "system", "board", {});
+        return {
+            success: true,
+            message: `Connected to ${info?.hostname || "OpenWRT"} (${info?.release?.description || "unknown version"})`,
+        };
+    } catch (error) {
+        return { success: false, message: `Connection failed: ${error}` };
     }
 }
 
@@ -438,13 +603,26 @@ async function blockWithDhcp(targetMAC: string, reason: string): Promise<boolean
 }
 
 export async function unblockDevice(ipAddress: string): Promise<boolean> {
+    const blocked = blockedDevices.get(ipAddress);
+    const macAddress = blocked?.macAddress || "";
+
     switch (settings.method) {
         case "arp":
         case "local":
+            blockedDevices.delete(ipAddress);
             return unblockWithArp(ipAddress);
         case "pihole":
+            blockedDevices.delete(ipAddress);
             return unblockWithPihole(ipAddress);
+        case "openwrt":
+            if (macAddress) {
+                blockedDevices.delete(ipAddress);
+                return unblockWithOpenwrt(macAddress);
+            }
+            console.log("[NetworkBlock] Cannot unblock via OpenWRT - no MAC address found");
+            return false;
         default:
+            blockedDevices.delete(ipAddress);
             // Remove nftables rule
             await execAsync(
                 `sudo nft delete rule inet filter input handle $(sudo nft -a list ruleset 2>/dev/null | grep "ip saddr ${ipAddress} drop" | awk '{print $NF}') 2>/dev/null || true`

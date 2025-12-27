@@ -144,6 +144,13 @@ export async function registerRoutes(
     res.json({ ...deps, blockedDevices: blocked });
   });
 
+  // Test OpenWRT connection
+  app.post("/api/network-block/test-openwrt", async (req, res) => {
+    const { testOpenwrtConnection } = await import("./network-block");
+    const result = await testOpenwrtConnection();
+    res.json(result);
+  });
+
   // Block device (DHCP-level, no IP)
   app.post("/api/devices/:id/block", async (req, res) => {
     const id = parseInt(req.params.id);

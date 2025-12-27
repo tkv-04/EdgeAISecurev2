@@ -38,6 +38,87 @@ interface BlockStatus {
   }>;
 }
 
+// OpenWRT Settings subcomponent with test connection
+function OpenWRTSettings({ 
+  localSettings, 
+  setLocalSettings 
+}: { 
+  localSettings: NetworkBlockSettings; 
+  setLocalSettings: React.Dispatch<React.SetStateAction<NetworkBlockSettings>>;
+}) {
+  const { toast } = useToast();
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const testMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/network-block/test-openwrt"),
+    onSuccess: (data: any) => {
+      setTestResult(data);
+      toast({
+        title: data.success ? "Connected!" : "Connection Failed",
+        description: data.message,
+        variant: data.success ? "default" : "destructive",
+      });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Test request failed", variant: "destructive" });
+    },
+  });
+
+  return (
+    <div className="space-y-4 p-4 border rounded-lg bg-muted/50">
+      <h4 className="font-medium text-sm">OpenWRT Configuration</h4>
+      <div className="grid gap-4 sm:grid-cols-3">
+        <div className="space-y-2">
+          <Label htmlFor="openwrt-host">Router IP</Label>
+          <Input
+            id="openwrt-host"
+            placeholder="192.168.1.1"
+            value={localSettings.openwrtHost || ""}
+            onChange={(e) => setLocalSettings((prev) => ({ ...prev, openwrtHost: e.target.value }))}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="openwrt-user">Username</Label>
+          <Input
+            id="openwrt-user"
+            placeholder="root"
+            value={localSettings.openwrtUser || ""}
+            onChange={(e) => setLocalSettings((prev) => ({ ...prev, openwrtUser: e.target.value }))}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="openwrt-password">Password</Label>
+          <Input
+            id="openwrt-password"
+            type="password"
+            placeholder="••••••••"
+            value={localSettings.openwrtPassword || ""}
+            onChange={(e) => setLocalSettings((prev) => ({ ...prev, openwrtPassword: e.target.value }))}
+          />
+        </div>
+      </div>
+      <div className="flex items-center gap-4">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => testMutation.mutate()}
+          disabled={testMutation.isPending || !localSettings.openwrtHost}
+        >
+          {testMutation.isPending ? "Testing..." : "Test Connection"}
+        </Button>
+        {testResult && (
+          <span className={`text-sm ${testResult.success ? "text-green-600" : "text-red-600"}`}>
+            {testResult.message}
+          </span>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Requires OpenWRT with uhttpd or luci-mod-rpc for ubus API access.
+      </p>
+    </div>
+  );
+}
+
 export function NetworkBlockingSettings() {
   const { toast } = useToast();
 
@@ -171,39 +252,10 @@ export function NetworkBlockingSettings() {
 
         {/* OpenWRT settings */}
         {localSettings.method === "openwrt" && (
-          <div className="space-y-4 p-4 border rounded-lg bg-muted/50">
-            <h4 className="font-medium text-sm">OpenWRT Configuration</h4>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div className="space-y-2">
-                <Label htmlFor="openwrt-host">Router IP</Label>
-                <Input
-                  id="openwrt-host"
-                  placeholder="192.168.1.1"
-                  value={localSettings.openwrtHost || ""}
-                  onChange={(e) => setLocalSettings((prev) => ({ ...prev, openwrtHost: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="openwrt-user">Username</Label>
-                <Input
-                  id="openwrt-user"
-                  placeholder="root"
-                  value={localSettings.openwrtUser || ""}
-                  onChange={(e) => setLocalSettings((prev) => ({ ...prev, openwrtUser: e.target.value }))}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="openwrt-password">Password</Label>
-                <Input
-                  id="openwrt-password"
-                  type="password"
-                  placeholder="••••••••"
-                  value={localSettings.openwrtPassword || ""}
-                  onChange={(e) => setLocalSettings((prev) => ({ ...prev, openwrtPassword: e.target.value }))}
-                />
-              </div>
-            </div>
-          </div>
+          <OpenWRTSettings 
+            localSettings={localSettings}
+            setLocalSettings={setLocalSettings}
+          />
         )}
 
         {/* Pi-hole settings */}
