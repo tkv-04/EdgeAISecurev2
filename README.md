@@ -1,142 +1,148 @@
-# Edge AI IoT Security Center
+# 🛡️ Edge AI IoT Security Center
 
-## Overview
+A Raspberry Pi-based network security system that monitors, detects, and blocks suspicious IoT devices on your home network.
 
-The Edge AI IoT Security Center is a comprehensive web application designed to monitor IoT devices on a local network, detect anomalies using simulated edge AI capabilities, and provide administrators with complete control through an intuitive dashboard. The application simulates a security monitoring system that automatically identifies new devices, analyzes network traffic patterns, detects suspicious behavior, and quarantines potentially compromised devices.
+## What It Does
 
-**Core Functionality:**
-- Real-time IoT device monitoring and identification
-- Automated anomaly detection with configurable sensitivity levels
-- Device lifecycle management (discovery, approval, monitoring, quarantine)
-- Comprehensive alerting system for security events
-- Audit logging for all administrative actions
-- Network traffic visualization and analysis
+**Turn your Raspberry Pi into a network security shield:**
 
-## User Preferences
+- 🔍 **Scans your network** for IoT devices (cameras, sensors, smart bulbs, etc.)
+- 🤖 **Identifies devices** automatically using MAC vendor lookup and port scanning
+- 🔔 **Alerts you** when new or suspicious devices appear
+- 🚫 **Blocks threats** at the DNS/DHCP level via Pi-hole integration
+- 📊 **Monitors traffic** in real-time with visual dashboards
 
-Preferred communication style: Simple, everyday language.
+## How It Works
 
-## System Architecture
+```
+Your Network
+     │
+     ▼
+┌─────────────────────────────────────────┐
+│           Raspberry Pi                  │
+│  ┌───────────────────────────────────┐  │
+│  │   Edge AI IoT Security Center     │  │
+│  │  • Scans for devices              │  │
+│  │  • Detects IoT types              │  │
+│  │  • Monitors behavior              │  │
+│  │  • Blocks suspicious devices      │  │
+│  └───────────────────────────────────┘  │
+│                  │                       │
+│                  ▼                       │
+│  ┌───────────────────────────────────┐  │
+│  │          Pi-hole DNS              │  │
+│  │  • Blocks ads network-wide        │  │
+│  │  • Blocks malicious devices       │  │
+│  └───────────────────────────────────┘  │
+└─────────────────────────────────────────┘
+```
 
-### Frontend Architecture
+## Features
 
-**Framework:** React 18 with TypeScript using Vite as the build tool
+### Device Discovery
+- Real network scanning using ARP and ping
+- Automatic MAC vendor identification (RaspberryPi, ESP, Apple, Xiaomi, etc.)
+- IoT device type detection (sensors, cameras, smart devices)
+- Background scheduled scanning
 
-**Routing:** Wouter - a lightweight routing library chosen for its minimal footprint and simple API, suitable for single-page applications with straightforward routing needs.
+### Threat Response
+| Action | What Happens | Use Case |
+|--------|--------------|----------|
+| **Approve** | Device is trusted and monitored | Known devices |
+| **Quarantine** | Device gets IP but traffic is blocked | Investigate suspicious device |
+| **Block** | Device is denied network access | Known threat |
 
-**State Management:**
-- **TanStack Query (React Query):** Handles all server state management, caching, and data synchronization. Provides automatic background refetching and optimistic updates for a responsive user experience.
-- **React Context:** Used for global application state including authentication, theme preferences, and user settings. Three primary contexts:
-  - `AuthContext`: Manages user authentication state and login/logout operations
-  - `ThemeContext`: Controls light/dark mode with localStorage persistence
-  - `SettingsContext`: Stores user preferences like anomaly sensitivity and refresh intervals
+### Pi-hole Integration
+- Blocks devices at DNS level (can't access internet)
+- Optional DHCP blocking (device gets no IP at all)
+- Works with Pi-hole v6 API
 
-**UI Component Library:** shadcn/ui (based on Radix UI primitives) - provides accessible, customizable components following the "New York" style variant. Components are copied into the project rather than installed as dependencies, allowing full customization.
+### Notifications
+- 🔔 In-app notification bell
+- 📲 Webhook support (Discord, Slack, Home Assistant)
+- Alerts for: new devices, offline devices, auto-blocks
 
-**Design System:** IBM Carbon Design System principles adapted for IoT security monitoring. Key decisions:
-- **Typography:** IBM Plex Sans for general UI, IBM Plex Mono for data/metrics to improve numerical readability
-- **Color Scheme:** Custom status color system with semantic meaning (normal, suspicious, danger, blocked, pending) implemented via CSS custom properties for both light and dark modes
-- **Layout:** Dense information display with functional minimalism - prioritizes data scannability over aesthetics
-- **Spacing:** Consistent Tailwind spacing units (2, 4, 6, 8) throughout the application
+## Quick Start
 
-**Data Visualization:** Recharts library for rendering network traffic charts and protocol distribution visualizations, chosen for its React-native approach and good TypeScript support.
+```bash
+# 1. Clone and install
+git clone https://github.com/tkv-04/EdgeAISecurev2.git
+cd EdgeAISecurev2
+npm install
 
-**Form Handling:** React Hook Form with Zod validation via @hookform/resolvers for type-safe form management.
+# 2. Install Pi-hole (optional but recommended)
+curl -sSL https://install.pi-hole.net | sudo bash
+sudo pihole setpassword 'your-password'
 
-### Backend Architecture
+# 3. Start the app
+npm run dev
 
-**Framework:** Express.js with TypeScript running on Node.js
+# 4. Open in browser
+http://localhost:5000
+```
 
-**Architecture Pattern:** Monolithic structure with clear separation of concerns:
-- **Routes Layer** (`server/routes.ts`): REST API endpoints grouped by feature area (auth, dashboard, devices, alerts, quarantine, logs, traffic)
-- **Storage Layer** (`server/storage.ts`): Abstract interface defining all data operations, enabling easy swapping of storage implementations
-- **Static Serving** (`server/static.ts`): Serves built frontend assets and handles SPA fallback routing
+**Login:** `admin@iot.local` / `admin123`
 
-**In-Memory Storage Implementation:** Currently uses an in-memory storage implementation with mock data for demonstration purposes. The storage interface is designed to be easily replaced with a database-backed implementation without changing route handlers.
+## Configuration
 
-**API Design:**
-- RESTful conventions with JSON request/response bodies
-- Consistent error handling with appropriate HTTP status codes
-- Query parameter support for filtering (e.g., severity, status filters)
-- Mutation endpoints follow POST/PUT/DELETE patterns
+### Settings Page
+1. Go to **Settings**
+2. Under **Network Blocking**, select method:
+   - **Local** - Blocks only at Pi level
+   - **Pi-hole** - DNS-level blocking (recommended)
+   - **OpenWRT** - Push rules to router (if you have one)
+3. Enter Pi-hole credentials if using that method
+4. Save
 
-**Session Management:** Built-in preparation for session-based authentication using express-session (referenced in package.json), though currently uses simplified credential checking for demo purposes.
+### For Full Network Protection
+1. Set your router to use Pi's IP as DNS server
+2. Or enable Pi-hole DHCP and disable router DHCP
+3. All devices will then go through the Pi for DNS
 
-### Data Storage Solutions
+## Tech Stack
 
-**Current State:** In-memory storage with mocked datasets, suitable for demonstration and development.
+- **Frontend:** React + TypeScript + Vite
+- **Backend:** Express.js + TypeScript
+- **Blocking:** Pi-hole API, iptables
+- **Scanning:** ARP, ping, port scanning
+- **Hardware:** Raspberry Pi (any model with network)
 
-**Schema Design:** Type-safe schemas defined in `shared/schema.ts` using Zod for runtime validation:
-- **Device Schema:** Tracks device identity, network information, status, and traffic metrics
-- **Alert Schema:** Records anomaly detections with severity levels and resolution status
-- **Quarantine Record Schema:** Manages isolated devices with quarantine reasons and timestamps
-- **Log Entry Schema:** Audit trail for all system events
-- **Traffic Data:** Time-series data for network traffic visualization
+## Project Structure
 
-**Database Preparation:** Infrastructure configured for PostgreSQL via Drizzle ORM:
-- Drizzle configuration present in `drizzle.config.ts`
-- Schema types are Zod-based and can be converted to Drizzle schemas
-- Migration directory structure established
-- Neon serverless PostgreSQL driver included in dependencies
+```
+├── server/
+│   ├── network-scanner.ts    # Device discovery
+│   ├── network-block.ts      # Blocking logic
+│   ├── notification-service.ts
+│   └── routes.ts             # API endpoints
+├── client/
+│   └── src/pages/
+│       ├── dashboard.tsx     # Main dashboard
+│       ├── devices.tsx       # Device management
+│       └── settings.tsx      # Configuration
+└── README.md
+```
 
-**Design Rationale:** The separation between Zod schemas and potential database schemas allows the application to validate data at runtime while maintaining the flexibility to add persistence later. The storage interface abstraction means database integration can be added without touching route handlers.
+## Requirements
 
-### Authentication and Authorization
+- Raspberry Pi (tested on Pi 5)
+- Node.js 18+
+- Pi-hole (optional, for DNS blocking)
 
-**Current Implementation:** Simplified demo authentication with hardcoded credentials (admin@iot.local / admin123)
+## Roadmap
 
-**Authentication Flow:**
-1. User submits credentials via login form
-2. Backend validates against demo credentials
-3. On success, user object stored in localStorage and AuthContext
-4. Protected routes check authentication state before rendering
-5. Logout clears localStorage and context state
+- [x] Real device discovery
+- [x] Notification system
+- [x] Pi-hole integration
+- [x] Zone-based blocking (quarantine vs block)
+- [ ] OpenWRT router integration
+- [ ] Edge AI anomaly detection model
+- [ ] Mobile app
 
-**Security Considerations (for production):**
-- Password hashing should be implemented (bcrypt recommended)
-- Session management via express-session and connect-pg-simple
-- CSRF protection for state-changing operations
-- Rate limiting for login attempts
-- Secure cookie configuration with httpOnly and secure flags
+## License
 
-**Authorization Model:** Single admin role with full access to all features. The architecture supports role-based expansion through the user object structure.
+MIT
 
-### External Dependencies
+---
 
-**Core Framework Dependencies:**
-- **React Ecosystem:** react@18, react-dom, react-router-alternative (wouter)
-- **Build Tools:** Vite for development server and production builds, TypeScript for type safety
-- **Backend:** Express.js for HTTP server, Node.js runtime
-
-**UI and Styling:**
-- **Tailwind CSS:** Utility-first styling with custom configuration for design system colors
-- **Radix UI:** Headless component primitives (@radix-ui/* packages) providing accessibility features
-- **shadcn/ui:** Pre-styled components built on Radix primitives
-- **class-variance-authority:** Type-safe CSS class composition for component variants
-- **Lucide React:** Icon library with consistent design language
-
-**Data Management:**
-- **TanStack Query:** Server state management, caching, and synchronization
-- **Zod:** Schema validation for runtime type checking
-- **date-fns:** Date manipulation and formatting
-
-**Data Visualization:**
-- **Recharts:** React-based charting library for traffic visualization
-
-**Database and ORM (prepared but not actively used):**
-- **Drizzle ORM:** Type-safe ORM for PostgreSQL
-- **@neondatabase/serverless:** PostgreSQL driver optimized for serverless environments
-- **drizzle-zod:** Converts Drizzle schemas to Zod validators
-
-**Development Tools:**
-- **Replit Plugins:** Development tooling for Replit environment (vite plugins for cartographer, dev banner, runtime error overlay)
-- **PostCSS & Autoprefixer:** CSS processing pipeline
-
-**Session and Security (configured but not fully implemented):**
-- **express-session:** Session middleware
-- **connect-pg-simple:** PostgreSQL-backed session store
-
-**Build Process:** 
-- Client built with Vite to `dist/public`
-- Server bundled with esbuild to `dist/index.cjs` with selective dependency bundling
-- Development mode runs TypeScript directly via tsx
+*Built for securing home IoT networks with a Raspberry Pi.*

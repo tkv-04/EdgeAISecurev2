@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { useTheme } from "@/lib/theme-context";
 import { useSettings } from "@/lib/settings-context";
+import { NetworkBlockingSettings } from "@/components/network-blocking-settings";
 import type { Settings } from "@shared/schema";
 
 export default function SettingsPage() {
@@ -337,6 +338,8 @@ export default function SettingsPage() {
             </div>
           </CardContent>
         </Card>
+
+        <NetworkBlockingSettings />
       </div>
 
       <Card>

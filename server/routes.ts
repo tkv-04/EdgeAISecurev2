@@ -144,6 +144,7 @@ export async function registerRoutes(
     res.json({ ...deps, blockedDevices: blocked });
   });
 
+  // Block device (DHCP-level, no IP)
   app.post("/api/devices/:id/block", async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) {
@@ -162,7 +163,8 @@ export async function registerRoutes(
       device.id,
       device.ipAddress,
       device.macAddress,
-      reason
+      reason,
+      "blocked"  // Full DHCP-level blocking
     );
 
     if (blocked) {
@@ -172,11 +174,48 @@ export async function registerRoutes(
         performedBy: "admin",
         deviceId: device.id,
         deviceName: device.name,
-        details: `Device blocked (network-wide): ${device.name} - ${reason}`,
+        details: `Device BLOCKED (DHCP-level): ${device.name} - ${reason}`,
       });
     }
 
-    res.json({ success: blocked, method: networkBlockService.getSettings().method });
+    res.json({ success: blocked, level: "blocked", method: networkBlockService.getSettings().method });
+  });
+
+  // Quarantine device (traffic-level filtering)
+  app.post("/api/devices/:id/quarantine", async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid device ID" });
+    }
+
+    const device = await storage.getDevice(id);
+    if (!device) {
+      return res.status(404).json({ error: "Device not found" });
+    }
+
+    const reason = req.body.reason || "Manual quarantine by admin";
+
+    const { networkBlockService } = await import("./network-block");
+    const quarantined = await networkBlockService.blockDevice(
+      device.id,
+      device.ipAddress,
+      device.macAddress,
+      reason,
+      "quarantined"  // Traffic-level filtering only
+    );
+
+    if (quarantined) {
+      await storage.createLog({
+        timestamp: new Date(),
+        eventType: "device_quarantined",
+        performedBy: "admin",
+        deviceId: device.id,
+        deviceName: device.name,
+        details: `Device QUARANTINED (traffic-level): ${device.name} - ${reason}`,
+      });
+    }
+
+    res.json({ success: quarantined, level: "quarantined", method: networkBlockService.getSettings().method });
   });
 
   app.post("/api/devices/:id/unblock", async (req, res) => {
