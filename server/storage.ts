@@ -43,6 +43,8 @@ export interface IStorage {
   updateDeviceMetrics(id: number, trafficRate: number): Promise<Device | undefined>;
   updateDeviceGroup(id: number, groupId: number | null): Promise<Device | undefined>;
   deleteDevice(id: number): Promise<boolean>;
+  getDeviceByMac(macAddress: string): Promise<Device | undefined>;
+  updateDeviceName(id: number, name: string): Promise<Device | undefined>;
   startBaselineLearning(deviceId: number): Promise<Device | undefined>;
 
   // Device Groups
@@ -115,7 +117,7 @@ function generateProtocolDistribution(): Record<string, number> {
   const protocols: Record<string, number> = {};
   let remaining = 100;
   const selectedProtocols = PROTOCOLS.slice(0, Math.floor(Math.random() * 4) + 2);
-  
+
   selectedProtocols.forEach((protocol, index) => {
     if (index === selectedProtocols.length - 1) {
       protocols[protocol] = remaining;
@@ -125,7 +127,7 @@ function generateProtocolDistribution(): Record<string, number> {
       remaining -= value;
     }
   });
-  
+
   return protocols;
 }
 
@@ -156,6 +158,24 @@ export class DatabaseStorage implements IStorage {
   async createDevice(device: InsertDevice): Promise<Device> {
     const [newDevice] = await db.insert(devices).values(device).returning();
     return newDevice;
+  }
+
+  async getDeviceByMac(macAddress: string): Promise<Device | undefined> {
+    const normalizedMac = macAddress.toUpperCase();
+    const [device] = await db
+      .select()
+      .from(devices)
+      .where(sql`UPPER(${devices.macAddress}) = ${normalizedMac}`);
+    return device;
+  }
+
+  async updateDeviceName(id: number, name: string): Promise<Device | undefined> {
+    const [device] = await db
+      .update(devices)
+      .set({ name, lastSeen: new Date() })
+      .where(eq(devices.id, id))
+      .returning();
+    return device;
   }
 
   async updateDeviceStatus(id: number, status: DeviceStatus): Promise<Device | undefined> {
@@ -199,10 +219,10 @@ export class DatabaseStorage implements IStorage {
       await db.delete(trafficData).where(eq(trafficData.deviceId, id));
       await db.delete(packetEvents).where(eq(packetEvents.deviceId, id));
       await db.delete(logs).where(eq(logs.deviceId, id));
-      
+
       // Now delete the device
       await db.delete(devices).where(eq(devices.id, id));
-      
+
       // Verify deletion was successful
       const deletedDevice = await this.getDevice(id);
       return deletedDevice === undefined;
@@ -391,12 +411,17 @@ export class DatabaseStorage implements IStorage {
   async getDashboardStats(): Promise<DashboardStats> {
     const allDevices = await this.getDevices();
     const allAlerts = await this.getAlerts();
-    
+
+    // Approved devices are those with status: approved, active, monitoring, learning, anomalous
+    const approvedStatuses = ["approved", "active", "monitoring", "learning", "anomalous"];
+    const approvedDevices = allDevices.filter((d) => approvedStatuses.includes(d.status));
+
     return {
       totalDevices: allDevices.length,
+      approvedDevices: approvedDevices.length,
       pendingApprovals: allDevices.filter((d) => d.status === "new").length,
       activeAlerts: allAlerts.filter((a) => a.status === "open").length,
-      quarantinedDevices: allDevices.filter((d) => d.status === "quarantined").length,
+      quarantinedDevices: allDevices.filter((d) => d.status === "quarantined" || d.status === "blocked").length,
     };
   }
 
@@ -471,17 +496,17 @@ export class DatabaseStorage implements IStorage {
   async simulateAlert(): Promise<Alert | null> {
     const allDevices = await this.getDevices();
     const eligibleDevices = allDevices.filter((d) => d.status === "approved" || d.status === "monitoring");
-    
+
     if (eligibleDevices.length === 0) return null;
-    
+
     const device = eligibleDevices[Math.floor(Math.random() * eligibleDevices.length)];
     const anomalyTypes: AnomalyType[] = ["high_traffic", "unknown_ip", "port_scan", "protocol_violation", "unusual_timing", "data_exfiltration"];
     const severities: AlertSeverity[] = ["low", "medium", "high"];
-    
+
     const anomalyType = anomalyTypes[Math.floor(Math.random() * anomalyTypes.length)];
     const severity = severities[Math.floor(Math.random() * severities.length)];
     const score = severity === "high" ? 0.8 + Math.random() * 0.2 : severity === "medium" ? 0.5 + Math.random() * 0.3 : 0.2 + Math.random() * 0.3;
-    
+
     return this.createAlert({
       deviceId: device.id,
       deviceName: device.name,

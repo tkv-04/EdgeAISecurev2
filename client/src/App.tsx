@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { NotificationBell } from "@/components/notification-bell";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { ThemeProvider } from "@/lib/theme-context";
 import { SettingsProvider } from "@/lib/settings-context";
@@ -62,7 +63,10 @@ function AuthenticatedLayout({ children }: { children: React.ReactNode }) {
         <div className="flex flex-col flex-1 overflow-hidden">
           <header className="flex h-14 items-center justify-between gap-4 border-b px-4 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
             <SidebarTrigger data-testid="button-sidebar-toggle" />
-            <ThemeToggle />
+            <div className="flex items-center gap-2">
+              <NotificationBell />
+              <ThemeToggle />
+            </div>
           </header>
           <main className="flex-1 overflow-auto p-6">
             <div className="mx-auto max-w-7xl">

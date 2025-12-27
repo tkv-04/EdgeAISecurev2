@@ -57,10 +57,13 @@ export default function DashboardPage() {
   // Device selection state - default to first 4 devices
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<number>>(new Set());
 
-  // Initialize selected devices when devices load
+  // Initialize selected devices when devices load - only approved devices
   useEffect(() => {
     if (devices && devices.length > 0 && selectedDeviceIds.size === 0) {
-      const defaultIds = new Set(devices.slice(0, 4).map(d => d.id));
+      // Filter to only approved devices (not new or blocked)
+      const approvedStatuses = ["approved", "active", "monitoring", "learning", "anomalous"];
+      const approvedDevices = devices.filter(d => approvedStatuses.includes(d.status));
+      const defaultIds = new Set(approvedDevices.slice(0, 4).map(d => d.id));
       setSelectedDeviceIds(defaultIds);
     }
   }, [devices, selectedDeviceIds.size]);
@@ -143,6 +146,9 @@ export default function DashboardPage() {
 
   const chartData = formatTrafficData();
   const selectedDevices = devices?.filter(d => selectedDeviceIds.has(d.id)) || [];
+  // Filter to only show approved devices in the device selector and charts
+  const approvedStatuses = ["approved", "active", "monitoring", "learning", "anomalous"];
+  const approvedDevices = devices?.filter(d => approvedStatuses.includes(d.status)) || [];
   const chartColors = ["hsl(217, 91%, 55%)", "hsl(142, 76%, 45%)", "hsl(45, 93%, 50%)", "hsl(27, 87%, 55%)", "hsl(340, 82%, 52%)", "hsl(190, 75%, 45%)", "hsl(280, 70%, 50%)", "hsl(10, 80%, 50%)"];
 
   return (
@@ -172,8 +178,8 @@ export default function DashboardPage() {
         ) : (
           <>
             <SummaryCard
-              title="Total Devices"
-              value={stats?.totalDevices || 0}
+              title="Approved Devices"
+              value={stats?.approvedDevices || 0}
               icon={Wifi}
               variant="default"
             />
@@ -218,7 +224,7 @@ export default function DashboardPage() {
                   <div className="space-y-2">
                     <h4 className="font-medium text-sm mb-3">Select devices to display</h4>
                     <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                      {devices.map((device) => (
+                      {approvedDevices.map((device) => (
                         <div key={device.id} className="flex items-center space-x-2">
                           <Checkbox
                             id={`device-${device.id}`}
@@ -314,7 +320,7 @@ export default function DashboardPage() {
         <CardHeader className="flex flex-row items-center justify-between gap-4 pb-4">
           <div className="flex items-center gap-2">
             <Wifi className="h-5 w-5 text-muted-foreground" />
-            <CardTitle className="text-lg font-semibold">All Devices</CardTitle>
+            <CardTitle className="text-lg font-semibold">Approved Devices</CardTitle>
           </div>
           <Button variant="outline" size="sm" asChild>
             <Link href="/devices" data-testid="link-view-devices">
@@ -343,7 +349,7 @@ export default function DashboardPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {devices?.slice(0, 5).map((device) => (
+                  {approvedDevices?.slice(0, 5).map((device) => (
                     <TableRow
                       key={device.id}
                       className="hover-elevate"

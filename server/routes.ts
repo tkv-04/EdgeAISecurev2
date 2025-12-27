@@ -3,41 +3,42 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { loginSchema, insertDeviceGroupSchema } from "@shared/schema";
 import { z } from "zod";
+import { scanNetwork, getNetworkInterfaces, generateDeviceName, discoverDeviceDetails, getMacVendor, classifyDeviceType, scanPorts } from "./network-scanner";
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  
+
   // Seed initial data on startup
   await storage.seedInitialData();
-  
+
   // ==================== AUTH ROUTES ====================
   app.post("/api/auth/login", async (req, res) => {
     const parsed = loginSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request body", details: parsed.error.errors });
     }
-    
+
     const { email, password } = parsed.data;
-    
+
     // Demo credentials check (in production, verify against hashed password)
-    const validCredentials = 
+    const validCredentials =
       (email === "admin@iot.local" && password === "admin123") ||
       (email === "tkvfiles@gmail.com" && password === "1234");
-    
+
     if (validCredentials) {
       const user = await storage.getUserByEmail(email);
-      
+
       await storage.createLog({
         timestamp: new Date(),
         eventType: "login",
         performedBy: user?.name || "admin",
         details: `${user?.name || email} logged in successfully`,
       });
-      
-      res.json({ 
-        success: true, 
+
+      res.json({
+        success: true,
         user: user ? { id: user.id, email: user.email, name: user.name } : { id: 1, email, name: "Admin User" }
       });
     } else {
@@ -61,6 +62,190 @@ export async function registerRoutes(
     res.json(stats);
   });
 
+  // ==================== NOTIFICATION ROUTES ====================
+  app.get("/api/notifications", async (req, res) => {
+    const { notificationService } = await import("./notification-service");
+    const limit = parseInt(req.query.limit as string) || 50;
+    res.json({
+      notifications: notificationService.getNotifications(limit),
+      unreadCount: notificationService.getUnreadCount(),
+    });
+  });
+
+  app.get("/api/notifications/settings", async (req, res) => {
+    const { notificationService } = await import("./notification-service");
+    res.json(notificationService.getSettings());
+  });
+
+  app.post("/api/notifications/settings", async (req, res) => {
+    const { notificationService } = await import("./notification-service");
+    const settings = notificationService.updateSettings(req.body);
+    res.json(settings);
+  });
+
+  app.post("/api/notifications/:id/read", async (req, res) => {
+    const { notificationService } = await import("./notification-service");
+    notificationService.markAsRead(req.params.id);
+    res.json({ success: true });
+  });
+
+  app.post("/api/notifications/read-all", async (req, res) => {
+    const { notificationService } = await import("./notification-service");
+    notificationService.markAllAsRead();
+    res.json({ success: true });
+  });
+
+  app.delete("/api/notifications", async (req, res) => {
+    const { notificationService } = await import("./notification-service");
+    notificationService.clearAll();
+    res.json({ success: true });
+  });
+
+  // ==================== NETWORK ROUTES ====================
+  app.get("/api/network/interfaces", async (req, res) => {
+    try {
+      const interfaces = await getNetworkInterfaces();
+      res.json(interfaces);
+    } catch (error) {
+      console.error("Error getting network interfaces:", error);
+      res.status(500).json({ error: "Failed to get network interfaces" });
+    }
+  });
+
+  // Traffic monitoring
+  app.get("/api/network/stats", async (req, res) => {
+    const { trafficMonitor } = await import("./traffic-monitor");
+    const summary = await trafficMonitor.getNetworkSummary();
+    res.json(summary);
+  });
+
+  app.get("/api/network/devices-traffic", async (req, res) => {
+    const { trafficMonitor } = await import("./traffic-monitor");
+    const traffic = await trafficMonitor.getDeviceTraffic();
+    res.json(traffic);
+  });
+
+  // Network-wide blocking settings
+  app.get("/api/network-block/settings", async (req, res) => {
+    const { networkBlockService } = await import("./network-block");
+    res.json(networkBlockService.getSettings());
+  });
+
+  app.post("/api/network-block/settings", async (req, res) => {
+    const { networkBlockService } = await import("./network-block");
+    const settings = networkBlockService.updateSettings(req.body);
+    res.json(settings);
+  });
+
+  app.get("/api/network-block/status", async (req, res) => {
+    const { networkBlockService } = await import("./network-block");
+    const deps = await networkBlockService.checkDependencies();
+    const blocked = networkBlockService.getBlockedDevices();
+    res.json({ ...deps, blockedDevices: blocked });
+  });
+
+  app.post("/api/devices/:id/block", async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid device ID" });
+    }
+
+    const device = await storage.getDevice(id);
+    if (!device) {
+      return res.status(404).json({ error: "Device not found" });
+    }
+
+    const reason = req.body.reason || "Manual block by admin";
+
+    const { networkBlockService } = await import("./network-block");
+    const blocked = await networkBlockService.blockDevice(
+      device.id,
+      device.ipAddress,
+      device.macAddress,
+      reason
+    );
+
+    if (blocked) {
+      await storage.createLog({
+        timestamp: new Date(),
+        eventType: "device_blocked",
+        performedBy: "admin",
+        deviceId: device.id,
+        deviceName: device.name,
+        details: `Device blocked (network-wide): ${device.name} - ${reason}`,
+      });
+    }
+
+    res.json({ success: blocked, method: networkBlockService.getSettings().method });
+  });
+
+  app.post("/api/devices/:id/unblock", async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid device ID" });
+    }
+
+    const device = await storage.getDevice(id);
+    if (!device) {
+      return res.status(404).json({ error: "Device not found" });
+    }
+
+    const { networkBlockService } = await import("./network-block");
+    const unblocked = await networkBlockService.unblockDevice(device.ipAddress);
+
+    if (unblocked) {
+      await storage.createLog({
+        timestamp: new Date(),
+        eventType: "device_unblocked",
+        performedBy: "admin",
+        deviceId: device.id,
+        deviceName: device.name,
+        details: `Device unblocked: ${device.name}`,
+      });
+    }
+
+    res.json({ success: unblocked });
+  });
+
+  // Background scanner status endpoint
+  app.get("/api/scanner/status", async (req, res) => {
+    const { getScannerStatus } = await import("./background-scanner");
+    res.json(getScannerStatus());
+  });
+
+  // Start/stop background scanner
+  app.post("/api/scanner/start", async (req, res) => {
+    const schema = z.object({
+      intervalMinutes: z.number().min(1).max(60).optional().default(5),
+    });
+    const parsed = schema.safeParse(req.body);
+    const interval = parsed.success ? parsed.data.intervalMinutes : 5;
+
+    const { startBackgroundScanner, getScannerStatus } = await import("./background-scanner");
+    startBackgroundScanner(interval);
+    res.json(getScannerStatus());
+  });
+
+  app.post("/api/scanner/stop", async (req, res) => {
+    const { stopBackgroundScanner, getScannerStatus } = await import("./background-scanner");
+    stopBackgroundScanner();
+    res.json(getScannerStatus());
+  });
+
+  app.post("/api/scanner/interval", async (req, res) => {
+    const schema = z.object({
+      intervalMinutes: z.number().min(1).max(60),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid interval" });
+    }
+
+    const { setScanInterval, getScannerStatus } = await import("./background-scanner");
+    setScanInterval(parsed.data.intervalMinutes);
+    res.json(getScannerStatus());
+  });
+
   // ==================== DEVICE ROUTES ====================
   app.get("/api/devices", async (req, res) => {
     const devices = await storage.getDevices();
@@ -79,9 +264,151 @@ export async function registerRoutes(
     res.json(device);
   });
 
+  // Get device type/port info for a specific device
+  app.get("/api/devices/:id/detect", async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid device ID" });
+    }
+    const device = await storage.getDevice(id);
+    if (!device) {
+      return res.status(404).json({ error: "Device not found" });
+    }
+
+    try {
+      // Scan ports
+      const { openPorts, services } = await scanPorts(device.ipAddress);
+      const macVendor = getMacVendor(device.macAddress);
+      const deviceType = classifyDeviceType(macVendor, openPorts, services);
+
+      res.json({
+        deviceId: device.id,
+        name: device.name,
+        ipAddress: device.ipAddress,
+        macAddress: device.macAddress,
+        vendor: macVendor || "Unknown",
+        openPorts,
+        services,
+        deviceType,
+        isIoT: ["IoT Sensor", "Camera", "Smart Device"].includes(deviceType),
+      });
+    } catch (error) {
+      console.error("Error detecting device type:", error);
+      res.status(500).json({ error: "Failed to detect device type" });
+    }
+  });
+
+  // Rename device endpoint
+  app.put("/api/devices/:id", async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid device ID" });
+    }
+
+    const schema = z.object({
+      name: z.string().min(1).max(100),
+    });
+
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid request body", details: parsed.error.errors });
+    }
+
+    const device = await storage.updateDeviceName(id, parsed.data.name);
+    if (!device) {
+      return res.status(404).json({ error: "Device not found" });
+    }
+
+    await storage.createLog({
+      timestamp: new Date(),
+      eventType: "settings_changed",
+      performedBy: "admin",
+      deviceId: device.id,
+      deviceName: device.name,
+      details: `Device renamed to "${device.name}"`,
+    });
+
+    res.json(device);
+  });
+
+  // Network scan endpoint - discover real devices on the network
+  app.post("/api/devices/scan", async (req, res) => {
+    try {
+      const schema = z.object({
+        interface: z.string().optional(),
+        deep: z.boolean().optional().default(false),
+      });
+
+      const parsed = schema.safeParse(req.body);
+      const iface = parsed.success ? parsed.data.interface : undefined;
+      const deep = parsed.success ? parsed.data.deep : false;
+
+      console.log(`Starting network scan (interface: ${iface || "all"}, deep: ${deep})`);
+
+      const discoveredDevices = await scanNetwork(iface, deep);
+      const newDevices: any[] = [];
+
+      for (const discovered of discoveredDevices) {
+        // Check if device already exists by MAC address
+        const existingDevice = await storage.getDeviceByMac(discovered.macAddress);
+
+        if (!existingDevice) {
+          // Generate a friendly name from hostname or MAC vendor
+          const deviceName = await generateDeviceName(discovered.macAddress, discovered.ipAddress);
+
+          // Create new device
+          const newDevice = await storage.createDevice({
+            name: deviceName,
+            macAddress: discovered.macAddress.toUpperCase(),
+            ipAddress: discovered.ipAddress,
+            status: "new",
+            firstSeen: new Date(),
+            lastSeen: new Date(),
+            trafficRate: 0,
+            avgTrafficRate: 0,
+            protocols: {},
+          });
+
+          newDevices.push(newDevice);
+
+          // Log device discovery
+          await storage.createLog({
+            timestamp: new Date(),
+            eventType: "device_discovered",
+            performedBy: "system",
+            deviceId: newDevice.id,
+            deviceName: newDevice.name,
+            details: `Real device discovered on network: ${newDevice.name} (${discovered.ipAddress}, ${discovered.macAddress})`,
+          });
+
+          // Send notification
+          const { notificationService } = await import("./notification-service");
+          await notificationService.notifyNewDevice(
+            newDevice.name,
+            discovered.ipAddress,
+            discovered.macAddress,
+            newDevice.id
+          );
+        } else {
+          // Update last seen for existing device
+          await storage.updateDeviceMetrics(existingDevice.id, existingDevice.trafficRate);
+        }
+      }
+
+      res.json({
+        scanned: discoveredDevices.length,
+        newDevices: newDevices.length,
+        devices: newDevices,
+      });
+    } catch (error) {
+      console.error("Error scanning network:", error);
+      res.status(500).json({ error: "Failed to scan network" });
+    }
+  });
+
   app.post("/api/devices/simulate", async (req, res) => {
     const device = await storage.simulateNewDevice();
-    
+
     await storage.createLog({
       timestamp: new Date(),
       eventType: "device_discovered",
@@ -90,7 +417,7 @@ export async function registerRoutes(
       deviceName: device.name,
       details: `New device ${device.name} discovered on network`,
     });
-    
+
     res.json(device);
   });
 
@@ -103,7 +430,7 @@ export async function registerRoutes(
     if (!device) {
       return res.status(404).json({ error: "Device not found" });
     }
-    
+
     await storage.createLog({
       timestamp: new Date(),
       eventType: "device_approved",
@@ -112,7 +439,7 @@ export async function registerRoutes(
       deviceName: device.name,
       details: `Device ${device.name} was approved and baseline learning started`,
     });
-    
+
     res.json(device);
   });
 
@@ -125,7 +452,7 @@ export async function registerRoutes(
     if (!device) {
       return res.status(404).json({ error: "Device not found" });
     }
-    
+
     await storage.createLog({
       timestamp: new Date(),
       eventType: "device_rejected",
@@ -134,7 +461,7 @@ export async function registerRoutes(
       deviceName: device.name,
       details: `Device ${device.name} was rejected and blocked from the network`,
     });
-    
+
     res.json(device);
   });
 
@@ -147,7 +474,7 @@ export async function registerRoutes(
     if (!device) {
       return res.status(404).json({ error: "Device not found" });
     }
-    
+
     await storage.createLog({
       timestamp: new Date(),
       eventType: "device_blocked",
@@ -156,7 +483,7 @@ export async function registerRoutes(
       deviceName: device.name,
       details: `Device ${device.name} was manually blocked from the network`,
     });
-    
+
     res.json(device);
   });
 
@@ -169,7 +496,7 @@ export async function registerRoutes(
     if (!device) {
       return res.status(404).json({ error: "Device not found" });
     }
-    
+
     await storage.createLog({
       timestamp: new Date(),
       eventType: "device_approved",
@@ -178,7 +505,7 @@ export async function registerRoutes(
       deviceName: device.name,
       details: `Device ${device.name} was unblocked and re-approved`,
     });
-    
+
     res.json(device);
   });
 
@@ -191,7 +518,7 @@ export async function registerRoutes(
     if (!device) {
       return res.status(404).json({ error: "Device not found" });
     }
-    
+
     // Create log before deletion (device info is needed)
     await storage.createLog({
       timestamp: new Date(),
@@ -201,12 +528,12 @@ export async function registerRoutes(
       deviceName: device.name,
       details: `Device ${device.name} was removed from the network`,
     });
-    
+
     const deleted = await storage.deleteDevice(id);
     if (!deleted) {
       return res.status(500).json({ error: "Failed to delete device" });
     }
-    
+
     res.json({ success: true });
   });
 
@@ -259,18 +586,18 @@ export async function registerRoutes(
     if (isNaN(id)) {
       return res.status(400).json({ error: "Invalid device ID" });
     }
-    
+
     const schema = z.object({ groupId: z.number().nullable() });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request body" });
     }
-    
+
     const device = await storage.updateDeviceGroup(id, parsed.data.groupId);
     if (!device) {
       return res.status(404).json({ error: "Device not found" });
     }
-    
+
     res.json(device);
   });
 
@@ -294,7 +621,7 @@ export async function registerRoutes(
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid request body", details: parsed.error.errors });
     }
-    
+
     const group = await storage.createDeviceGroup(parsed.data);
     res.json(group);
   });
@@ -337,7 +664,7 @@ export async function registerRoutes(
     if (!alert) {
       return res.status(400).json({ error: "No devices available for alert simulation" });
     }
-    
+
     await storage.createLog({
       timestamp: new Date(),
       eventType: "anomaly_detected",
@@ -346,13 +673,13 @@ export async function registerRoutes(
       deviceName: alert.deviceName,
       details: alert.description,
     });
-    
+
     // Auto-quarantine for high severity alerts
     if (alert.severity === "high") {
       const device = await storage.getDevice(alert.deviceId);
       if (device && device.status !== "quarantined") {
         await storage.updateDeviceStatus(alert.deviceId, "quarantined");
-        
+
         await storage.createQuarantineRecord({
           deviceId: alert.deviceId,
           deviceName: alert.deviceName,
@@ -360,7 +687,7 @@ export async function registerRoutes(
           timeQuarantined: new Date(),
           alertId: alert.id,
         });
-        
+
         await storage.createLog({
           timestamp: new Date(),
           eventType: "device_quarantined",
@@ -371,7 +698,7 @@ export async function registerRoutes(
         });
       }
     }
-    
+
     res.json(alert);
   });
 
@@ -414,10 +741,10 @@ export async function registerRoutes(
     if (!record) {
       return res.status(404).json({ error: "Quarantine record not found" });
     }
-    
+
     await storage.updateDeviceStatus(record.deviceId, "approved");
     await storage.deleteQuarantineRecord(id);
-    
+
     await storage.createLog({
       timestamp: new Date(),
       eventType: "device_released",
@@ -426,7 +753,7 @@ export async function registerRoutes(
       deviceName: record.deviceName,
       details: `Device ${record.deviceName} released from quarantine`,
     });
-    
+
     res.json({ success: true });
   });
 
@@ -439,10 +766,10 @@ export async function registerRoutes(
     if (!record) {
       return res.status(404).json({ error: "Quarantine record not found" });
     }
-    
+
     await storage.updateDeviceStatus(record.deviceId, "blocked");
     await storage.deleteQuarantineRecord(id);
-    
+
     await storage.createLog({
       timestamp: new Date(),
       eventType: "device_blocked",
@@ -451,7 +778,7 @@ export async function registerRoutes(
       deviceName: record.deviceName,
       details: `Device ${record.deviceName} permanently blocked from network`,
     });
-    
+
     res.json({ success: true });
   });
 

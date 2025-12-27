@@ -9,6 +9,8 @@ import {
   RefreshCw,
   Shield,
   AlertTriangle,
+  Radar,
+  Pencil,
 } from "lucide-react";
 import { StatusBadge } from "@/components/status-badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -41,7 +43,8 @@ export default function DevicesPage() {
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
-  const [actionType, setActionType] = useState<"approve" | "reject" | "block" | "unblock" | "simulate-attack" | null>(null);
+  const [actionType, setActionType] = useState<"approve" | "reject" | "block" | "unblock" | "simulate-attack" | "rename" | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
   const { data: devices, isLoading } = useQuery<Device[]>({
     queryKey: ["/api/devices"],
@@ -103,6 +106,30 @@ export default function DevicesPage() {
     },
   });
 
+  // Network scan mutation
+  const scanMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", "/api/devices/scan", { deep: false });
+      return response.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/devices"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/dashboard/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/logs"] });
+      toast({
+        title: "Network Scan Complete",
+        description: `Found ${data.scanned} device(s) on network. ${data.newDevices} new device(s) added.`,
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to scan network. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
+
   const simulateMutation = useMutation({
     mutationFn: async () => {
       await apiRequest("POST", "/api/devices/simulate");
@@ -130,10 +157,36 @@ export default function DevicesPage() {
     
     if (actionType === "approve") {
       approveMutation.mutate(selectedDevice.id);
+    } else if (actionType === "rename") {
+      renameMutation.mutate({ id: selectedDevice.id, name: renameValue });
     } else {
       rejectMutation.mutate(selectedDevice.id);
     }
   };
+
+  // Rename mutation
+  const renameMutation = useMutation({
+    mutationFn: async ({ id, name }: { id: number; name: string }) => {
+      await apiRequest("PUT", `/api/devices/${id}`, { name });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/devices"] });
+      toast({
+        title: "Device Renamed",
+        description: `Device has been renamed to "${renameValue}".`,
+      });
+      setSelectedDevice(null);
+      setActionType(null);
+      setRenameValue("");
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to rename device. Please try again.",
+        variant: "destructive",
+      });
+    },
+  });
 
   return (
     <div className="space-y-6">
@@ -144,18 +197,33 @@ export default function DevicesPage() {
             Review and onboard new devices discovered on your network
           </p>
         </div>
-        <Button
-          onClick={() => simulateMutation.mutate()}
-          disabled={simulateMutation.isPending}
-          data-testid="button-simulate-device"
-        >
-          {simulateMutation.isPending ? (
-            <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <Plus className="mr-2 h-4 w-4" />
-          )}
-          Add Simulated Device
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            onClick={() => scanMutation.mutate()}
+            disabled={scanMutation.isPending}
+            data-testid="button-scan-network"
+          >
+            {scanMutation.isPending ? (
+              <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Radar className="mr-2 h-4 w-4" />
+            )}
+            Scan Network
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => simulateMutation.mutate()}
+            disabled={simulateMutation.isPending}
+            data-testid="button-simulate-device"
+          >
+            {simulateMutation.isPending ? (
+              <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Plus className="mr-2 h-4 w-4" />
+            )}
+            Simulate
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -219,7 +287,24 @@ export default function DevicesPage() {
                       className="hover-elevate"
                       data-testid={`row-device-${device.id}`}
                     >
-                      <TableCell className="font-medium">{device.name}</TableCell>
+                      <TableCell className="font-medium">
+                        <div className="flex items-center gap-2">
+                          {device.name}
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-6 w-6"
+                            onClick={() => {
+                              setSelectedDevice(device);
+                              setRenameValue(device.name);
+                              setActionType("rename");
+                            }}
+                            data-testid={`button-rename-${device.id}`}
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      </TableCell>
                       <TableCell className="font-mono text-sm">{device.macAddress}</TableCell>
                       <TableCell className="font-mono text-sm">{device.ipAddress}</TableCell>
                       <TableCell className="font-mono text-xs text-muted-foreground">
@@ -267,25 +352,39 @@ export default function DevicesPage() {
       <AlertDialog open={!!selectedDevice && !!actionType} onOpenChange={() => {
         setSelectedDevice(null);
         setActionType(null);
+        setRenameValue("");
       }}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {actionType === "approve" ? "Approve Device?" : "Reject Device?"}
+              {actionType === "approve" ? "Approve Device?" : actionType === "rename" ? "Rename Device" : "Reject Device?"}
             </AlertDialogTitle>
-            <AlertDialogDescription>
-              {actionType === "approve" ? (
-                <>
-                  This will approve <strong>{selectedDevice?.name}</strong> and begin baseline
-                  learning for anomaly detection. The device will be allowed to communicate
-                  on the network.
-                </>
-              ) : (
-                <>
-                  This will block <strong>{selectedDevice?.name}</strong> from the network.
-                  The device will not be able to communicate and will be marked as blocked.
-                </>
-              )}
+            <AlertDialogDescription asChild>
+              <div>
+                {actionType === "approve" ? (
+                  <>
+                    This will approve <strong>{selectedDevice?.name}</strong> and begin baseline
+                    learning for anomaly detection. The device will be allowed to communicate
+                    on the network.
+                  </>
+                ) : actionType === "rename" ? (
+                  <div className="space-y-3 pt-2">
+                    <p>Enter a new name for this device:</p>
+                    <Input
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      placeholder="Device name"
+                      autoFocus
+                      data-testid="input-rename-device"
+                    />
+                  </div>
+                ) : (
+                  <>
+                    This will block <strong>{selectedDevice?.name}</strong> from the network.
+                    The device will not be able to communicate and will be marked as blocked.
+                  </>
+                )}
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -293,9 +392,10 @@ export default function DevicesPage() {
             <AlertDialogAction
               onClick={handleAction}
               className={actionType === "reject" ? "bg-destructive hover:bg-destructive/90" : ""}
+              disabled={actionType === "rename" && !renameValue.trim()}
               data-testid="button-confirm-action"
             >
-              {actionType === "approve" ? "Approve" : "Block Device"}
+              {actionType === "approve" ? "Approve" : actionType === "rename" ? "Save" : "Block Device"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -195,6 +195,7 @@ export type LoginCredentials = z.infer<typeof loginSchema>;
 // Dashboard Stats
 export const dashboardStatsSchema = z.object({
   totalDevices: z.number(),
+  approvedDevices: z.number(),
   pendingApprovals: z.number(),
   activeAlerts: z.number(),
   quarantinedDevices: z.number(),
