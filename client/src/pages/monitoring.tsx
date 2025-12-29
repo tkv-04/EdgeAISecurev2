@@ -1,12 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
 import { useState, useEffect } from "react";
-import { useSearch } from "wouter";
-import {
-  Radio,
-  Activity,
-  ArrowUp,
-  ArrowDown,
-  Clock,
+import { useQuery } from "@tanstack/react-query";
+import { 
+  Activity, ArrowDown, ArrowUp, Wifi, Clock, Info, Shield
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -16,133 +11,153 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   PieChart,
   Pie,
   Cell,
   ResponsiveContainer,
-  Legend,
   Tooltip,
+  Legend,
 } from "recharts";
-import type { Device, PacketEvent } from "@shared/schema";
+
+interface Device {
+  id: number;
+  name: string;
+  ipAddress: string;
+  macAddress: string;
+  status: string;
+  lastSeen: string;
+}
+
+interface SuricataStats {
+  uptime: number;
+  packetsTotal: number;
+  alertsTotal: number;
+  flowsTotal: number;
+}
+
+interface SuricataStatus {
+  running: boolean;
+  evePath: string;
+}
+
+interface DeviceTraffic {
+  ipAddress: string;
+  bytesIn: number;
+  bytesOut: number;
+  flowCount: number;
+  protocolDistribution: Record<string, number>;
+  recentFlows: Array<{
+    timestamp: string;
+    protocol: string;
+    destIp: string;
+    bytes: number;
+  }>;
+  lastUpdated: string;
+}
 
 const PROTOCOL_COLORS: Record<string, string> = {
-  HTTP: "hsl(217, 91%, 55%)",
-  HTTPS: "hsl(217, 91%, 40%)",
-  MQTT: "hsl(142, 76%, 45%)",
-  CoAP: "hsl(45, 93%, 50%)",
-  WebSocket: "hsl(27, 87%, 55%)",
-  TCP: "hsl(340, 82%, 52%)",
-  UDP: "hsl(280, 65%, 55%)",
-  DNS: "hsl(190, 75%, 45%)",
+  tcp: "#ef4444",
+  http: "#3b82f6",
+  tls: "#22c55e",
+  mqtt: "#f59e0b",
+  udp: "#8b5cf6",
+  dns: "#ec4899",
+  ssh: "#14b8a6",
+  quic: "#6366f1",
+  ntp: "#84cc16",
+  dhcp: "#f97316",
 };
 
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+}
+
 export default function MonitoringPage() {
-  const searchString = useSearch();
-  const urlParams = new URLSearchParams(searchString);
-  const deviceIdFromUrl = urlParams.get("device");
+  const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(null);
 
-  const [selectedDeviceId, setSelectedDeviceId] = useState<number>(0);
-
-  const { data: devices, isLoading: devicesLoading } = useQuery<Device[]>({
+  // Fetch approved devices
+  const { data: devices = [] } = useQuery<Device[]>({
     queryKey: ["/api/devices"],
+    select: (data) => data.filter((d) => 
+      ["approved", "active", "monitoring", "learning"].includes(d.status)
+    ),
   });
 
-  const approvedDevices = devices?.filter(
-    (d) => d.status === "approved" || d.status === "monitoring"
-  ) || [];
+  // Fetch Suricata status (auto-refresh)
+  const { data: suricataStatus } = useQuery<SuricataStatus>({
+    queryKey: ["/api/suricata/status"],
+    refetchInterval: 5000,
+  });
 
+  // Fetch Suricata stats (auto-refresh)
+  const { data: stats } = useQuery<SuricataStats>({
+    queryKey: ["/api/suricata/stats"],
+    refetchInterval: 3000,
+  });
+
+  // Fetch all device traffic from Suricata (auto-refresh)
+  const { data: allTraffic = [] } = useQuery<DeviceTraffic[]>({
+    queryKey: ["/api/suricata/traffic"],
+    refetchInterval: 2000,
+  });
+
+  // Auto-select first device
   useEffect(() => {
-    const urlDeviceId = deviceIdFromUrl ? parseInt(deviceIdFromUrl) : null;
-    if (urlDeviceId && approvedDevices.some((d) => d.id === urlDeviceId)) {
-      setSelectedDeviceId(urlDeviceId);
-    } else if (approvedDevices.length > 0 && !selectedDeviceId) {
-      setSelectedDeviceId(approvedDevices[0].id);
+    if (devices.length > 0 && !selectedDeviceId) {
+      setSelectedDeviceId(devices[0].id);
     }
-  }, [deviceIdFromUrl, approvedDevices, selectedDeviceId]);
+  }, [devices, selectedDeviceId]);
 
-  const selectedDevice = approvedDevices.find((d) => d.id === selectedDeviceId);
+  const selectedDevice = devices.find((d) => d.id === selectedDeviceId);
+  
+  // Get traffic for selected device
+  const deviceTraffic = selectedDevice 
+    ? allTraffic.find((t) => t.ipAddress === selectedDevice.ipAddress)
+    : null;
 
-  const { data: packetEvents, isLoading: packetsLoading } = useQuery<PacketEvent[]>({
-    queryKey: ["/api/devices", selectedDeviceId, "packets"],
-    enabled: !!selectedDeviceId,
-  });
-
-  const protocolData = selectedDevice
-    ? Object.entries(selectedDevice.protocols as Record<string, number>).map(([name, value]) => ({
-        name,
+  // Prepare protocol distribution data for pie chart
+  const protocolData = deviceTraffic?.protocolDistribution 
+    ? Object.entries(deviceTraffic.protocolDistribution).map(([name, value]) => ({
+        name: name.toUpperCase(),
         value,
-        color: PROTOCOL_COLORS[name] || "hsl(var(--muted))",
+        color: PROTOCOL_COLORS[name.toLowerCase()] || "#6b7280",
       }))
     : [];
 
-  if (devicesLoading) {
-    return (
-      <div className="space-y-6">
-        <div>
-          <Skeleton className="h-8 w-48" />
-          <Skeleton className="h-4 w-64 mt-2" />
-        </div>
-        <Skeleton className="h-10 w-64" />
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Skeleton className="h-80" />
-          <Skeleton className="h-80" />
-        </div>
-        <Skeleton className="h-64" />
-      </div>
-    );
-  }
-
-  if (approvedDevices.length === 0) {
-    return (
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-semibold">Monitoring & Data Collection</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Real-time traffic analysis for approved devices
-          </p>
-        </div>
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-16">
-            <Radio className="h-12 w-12 text-muted-foreground/50 mb-4" />
-            <h3 className="text-lg font-medium">No Devices to Monitor</h3>
-            <p className="text-sm text-muted-foreground mt-1 text-center max-w-md">
-              Approve devices from the Device Identification page to begin monitoring their
-              network traffic and behavior patterns.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      {/* Header with Suricata Status */}
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Monitoring & Data Collection</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Real-time traffic analysis for approved devices
+          <h1 className="text-2xl font-bold">Monitoring & Data Collection</h1>
+          <p className="text-muted-foreground">
+            Real-time traffic analysis powered by Suricata IDS
           </p>
         </div>
-        <div className="w-full sm:w-72">
-          <Select value={String(selectedDeviceId)} onValueChange={(val) => setSelectedDeviceId(parseInt(val))}>
-            <SelectTrigger data-testid="select-device">
+
+        <div className="flex items-center gap-4">
+          <Badge variant={suricataStatus?.running ? "default" : "secondary"} className="gap-2">
+            <Shield className="h-3 w-3" />
+            {suricataStatus?.running ? "Suricata Active" : "Suricata Offline"}
+          </Badge>
+          
+          {/* Device selector */}
+          <Select
+            value={selectedDeviceId?.toString() || ""}
+            onValueChange={(value) => setSelectedDeviceId(parseInt(value))}
+          >
+            <SelectTrigger className="w-64">
               <SelectValue placeholder="Select a device" />
             </SelectTrigger>
             <SelectContent>
-              {approvedDevices.map((device) => (
-                <SelectItem key={device.id} value={String(device.id)}>
+              {devices.map((device) => (
+                <SelectItem key={device.id} value={device.id.toString()}>
                   {device.name} ({device.ipAddress})
                 </SelectItem>
               ))}
@@ -151,205 +166,180 @@ export default function MonitoringPage() {
         </div>
       </div>
 
-      {selectedDevice && (
-        <>
-          <div className="grid gap-4 lg:grid-cols-2">
-            <Card>
-              <CardHeader className="pb-2">
-                <div className="flex items-center gap-2">
-                  <Activity className="h-5 w-5 text-muted-foreground" />
-                  <CardTitle className="text-lg">Traffic Metrics</CardTitle>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="rounded-lg bg-muted/50 p-4">
-                    <p className="text-sm text-muted-foreground">Current Rate</p>
-                    <div className="flex items-baseline gap-2 mt-1">
-                      <span className="text-3xl font-semibold font-mono">
-                        {selectedDevice.trafficRate}
-                      </span>
-                      <span className="text-sm text-muted-foreground">pkts/sec</span>
-                    </div>
-                    <div className="flex items-center gap-1 mt-2 text-xs">
-                      {selectedDevice.trafficRate > selectedDevice.avgTrafficRate ? (
-                        <>
-                          <ArrowUp className="h-3 w-3 text-status-suspicious" />
-                          <span className="text-status-suspicious">
-                            {Math.round(
-                              ((selectedDevice.trafficRate - selectedDevice.avgTrafficRate) /
-                                selectedDevice.avgTrafficRate) *
-                                100
-                            )}
-                            % above baseline
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <ArrowDown className="h-3 w-3 text-status-normal" />
-                          <span className="text-status-normal">Within baseline</span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  <div className="rounded-lg bg-muted/50 p-4">
-                    <p className="text-sm text-muted-foreground">Baseline Average</p>
-                    <div className="flex items-baseline gap-2 mt-1">
-                      <span className="text-3xl font-semibold font-mono">
-                        {selectedDevice.avgTrafficRate}
-                      </span>
-                      <span className="text-sm text-muted-foreground">pkts/sec</span>
-                    </div>
-                    <div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
-                      <Clock className="h-3 w-3" />
-                      <span>24-hour rolling average</span>
-                    </div>
-                  </div>
-                </div>
+      {/* Global Stats Bar */}
+      <div className="grid grid-cols-4 gap-4">
+        <Card className="p-4">
+          <p className="text-xs text-muted-foreground">Suricata Uptime</p>
+          <p className="text-2xl font-bold">{Math.floor((stats?.uptime || 0) / 60)}m</p>
+        </Card>
+        <Card className="p-4">
+          <p className="text-xs text-muted-foreground">Total Packets</p>
+          <p className="text-2xl font-bold">{(stats?.packetsTotal || 0).toLocaleString()}</p>
+        </Card>
+        <Card className="p-4">
+          <p className="text-xs text-muted-foreground">Total Flows</p>
+          <p className="text-2xl font-bold">{(stats?.flowsTotal || 0).toLocaleString()}</p>
+        </Card>
+        <Card className="p-4">
+          <p className="text-xs text-muted-foreground">IDS Alerts</p>
+          <p className="text-2xl font-bold text-red-500">{stats?.alertsTotal || 0}</p>
+        </Card>
+      </div>
 
-                <div className="space-y-2">
-                  <p className="text-sm font-medium">Device Information</p>
-                  <div className="grid gap-2 text-sm">
-                    <div className="flex justify-between py-1 border-b border-border/50">
-                      <span className="text-muted-foreground">IP Address</span>
-                      <span className="font-mono">{selectedDevice.ipAddress}</span>
-                    </div>
-                    <div className="flex justify-between py-1 border-b border-border/50">
-                      <span className="text-muted-foreground">MAC Address</span>
-                      <span className="font-mono">{selectedDevice.macAddress}</span>
-                    </div>
-                    <div className="flex justify-between py-1">
-                      <span className="text-muted-foreground">Last Seen</span>
-                      <span className="font-mono text-xs">
-                        {new Date(selectedDevice.lastSeen).toLocaleString()}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-2">
-                <div className="flex items-center gap-2">
-                  <Radio className="h-5 w-5 text-muted-foreground" />
-                  <CardTitle className="text-lg">Protocol Distribution</CardTitle>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="h-[240px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={protocolData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={50}
-                        outerRadius={80}
-                        paddingAngle={2}
-                        dataKey="value"
-                        label={({ name, percent }) =>
-                          `${name} ${(percent * 100).toFixed(0)}%`
-                        }
-                        labelLine={false}
-                      >
-                        {protocolData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: "hsl(var(--card))",
-                          border: "1px solid hsl(var(--border))",
-                          borderRadius: "0.5rem",
-                          fontSize: 12,
-                        }}
-                        formatter={(value: number) => [`${value}%`, "Usage"]}
-                      />
-                      <Legend
-                        formatter={(value) => (
-                          <span className="text-xs">{value}</span>
-                        )}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          <Card>
-            <CardHeader className="pb-4">
-              <div className="flex items-center gap-2">
-                <Clock className="h-5 w-5 text-muted-foreground" />
-                <CardTitle className="text-lg">Recent Packet Events</CardTitle>
+      <div className="grid gap-6 lg:grid-cols-2">
+        {/* Traffic Metrics */}
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-center gap-2">
+              <Activity className="h-5 w-5 text-muted-foreground" />
+              <CardTitle className="text-lg">Traffic Metrics</CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="p-4 rounded-lg border bg-card">
+                <p className="text-sm text-muted-foreground flex items-center gap-1">
+                  <ArrowDown className="h-3 w-3 text-blue-500" /> Bytes In
+                </p>
+                <p className="text-2xl font-bold">
+                  {formatBytes(deviceTraffic?.bytesIn || 0)}
+                </p>
               </div>
-            </CardHeader>
-            <CardContent>
-              {packetsLoading ? (
-                <div className="space-y-3">
-                  {[1, 2, 3, 4, 5].map((i) => (
-                    <Skeleton key={i} className="h-12 w-full" />
-                  ))}
+              <div className="p-4 rounded-lg border bg-card">
+                <p className="text-sm text-muted-foreground flex items-center gap-1">
+                  <ArrowUp className="h-3 w-3 text-green-500" /> Bytes Out
+                </p>
+                <p className="text-2xl font-bold">
+                  {formatBytes(deviceTraffic?.bytesOut || 0)}
+                </p>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-lg border bg-card">
+              <p className="text-sm text-muted-foreground">Total Flows</p>
+              <p className="text-2xl font-bold">{deviceTraffic?.flowCount || 0}</p>
+            </div>
+
+            {/* Device Info */}
+            <div className="space-y-2">
+              <h4 className="font-medium text-sm flex items-center gap-2">
+                <Info className="h-4 w-4" />
+                Device Information
+              </h4>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">IP Address</span>
+                  <span className="font-mono">{selectedDevice?.ipAddress || "-"}</span>
                 </div>
-              ) : !packetEvents || packetEvents.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-8 text-center">
-                  <Clock className="h-8 w-8 text-muted-foreground/50 mb-3" />
-                  <p className="text-sm text-muted-foreground">
-                    No recent packet events to display
-                  </p>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">MAC Address</span>
+                  <span className="font-mono text-xs">{selectedDevice?.macAddress || "-"}</span>
                 </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Timestamp</TableHead>
-                        <TableHead>Protocol</TableHead>
-                        <TableHead>Source IP</TableHead>
-                        <TableHead>Destination IP</TableHead>
-                        <TableHead>Size</TableHead>
-                        <TableHead>Direction</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {packetEvents.slice(0, 10).map((event) => (
-                        <TableRow key={event.id} className="hover-elevate">
-                          <TableCell className="font-mono text-xs text-muted-foreground">
-                            {new Date(event.timestamp).toLocaleTimeString()}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="outline">{event.protocol}</Badge>
-                          </TableCell>
-                          <TableCell className="font-mono text-sm">{event.sourceIp}</TableCell>
-                          <TableCell className="font-mono text-sm">{event.destIp}</TableCell>
-                          <TableCell className="font-mono text-sm">{event.size} B</TableCell>
-                          <TableCell>
-                            <span
-                              className={`inline-flex items-center gap-1 text-xs ${
-                                event.direction === "inbound"
-                                  ? "text-status-pending"
-                                  : "text-status-normal"
-                              }`}
-                            >
-                              {event.direction === "inbound" ? (
-                                <ArrowDown className="h-3 w-3" />
-                              ) : (
-                                <ArrowUp className="h-3 w-3" />
-                              )}
-                              {event.direction}
-                            </span>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                <div className="flex justify-between col-span-2">
+                  <span className="text-muted-foreground">Last Updated</span>
+                  <span>{deviceTraffic?.lastUpdated ? new Date(deviceTraffic.lastUpdated).toLocaleString() : "-"}</span>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </>
-      )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Protocol Distribution */}
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-center gap-2">
+              <Wifi className="h-5 w-5 text-muted-foreground" />
+              <CardTitle className="text-lg">Protocol Distribution</CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {protocolData.length > 0 ? (
+              <ResponsiveContainer width="100%" height={250}>
+                <PieChart>
+                  <Pie
+                    data={protocolData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={60}
+                    outerRadius={100}
+                    dataKey="value"
+                    nameKey="name"
+                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                  >
+                    {protocolData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex items-center justify-center h-64 text-muted-foreground">
+                {suricataStatus?.running 
+                  ? "Waiting for traffic data..." 
+                  : "Suricata not running"}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Recent Flows */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center gap-2">
+            <Clock className="h-5 w-5 text-muted-foreground" />
+            <CardTitle className="text-lg">Recent Flows</CardTitle>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left p-2 font-medium">Timestamp</th>
+                  <th className="text-left p-2 font-medium">Protocol</th>
+                  <th className="text-left p-2 font-medium">Destination</th>
+                  <th className="text-left p-2 font-medium">Size</th>
+                </tr>
+              </thead>
+              <tbody>
+                {deviceTraffic?.recentFlows && deviceTraffic.recentFlows.length > 0 ? (
+                  [...deviceTraffic.recentFlows].reverse().slice(0, 20).map((flow, idx) => (
+                    <tr key={idx} className="border-b hover:bg-muted/50">
+                      <td className="p-2 font-mono text-xs">
+                        {new Date(flow.timestamp).toLocaleTimeString()}
+                      </td>
+                      <td className="p-2">
+                        <Badge 
+                          variant="outline" 
+                          style={{ 
+                            borderColor: PROTOCOL_COLORS[flow.protocol.toLowerCase()] || "#6b7280",
+                            color: PROTOCOL_COLORS[flow.protocol.toLowerCase()] || "#6b7280",
+                          }}
+                        >
+                          {flow.protocol.toUpperCase()}
+                        </Badge>
+                      </td>
+                      <td className="p-2 font-mono">{flow.destIp}</td>
+                      <td className="p-2">{formatBytes(flow.bytes)}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={4} className="p-8 text-center text-muted-foreground">
+                      {suricataStatus?.running 
+                        ? "No flows captured yet for this device" 
+                        : "Suricata not running - traffic monitoring inactive"}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

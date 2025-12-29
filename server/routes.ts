@@ -125,6 +125,118 @@ export async function registerRoutes(
     res.json(traffic);
   });
 
+  // Traffic monitoring settings
+  app.get("/api/traffic-monitor/settings", async (req, res) => {
+    const { trafficMonitor } = await import("./traffic-monitor");
+    res.json(trafficMonitor.getSettings());
+  });
+
+  app.post("/api/traffic-monitor/settings", async (req, res) => {
+    const { trafficMonitor } = await import("./traffic-monitor");
+    const settings = trafficMonitor.updateSettings(req.body);
+    res.json(settings);
+  });
+
+  // Suricata IDS integration
+  app.get("/api/suricata/status", async (req, res) => {
+    const { suricataService } = await import("./suricata-service");
+    res.json(suricataService.getStatus());
+  });
+
+  app.get("/api/suricata/stats", async (req, res) => {
+    const { suricataService } = await import("./suricata-service");
+    res.json(suricataService.getStats());
+  });
+
+  app.get("/api/suricata/alerts", async (req, res) => {
+    const limit = parseInt(req.query.limit as string) || 50;
+    const { suricataService } = await import("./suricata-service");
+    res.json(suricataService.getAlerts(limit));
+  });
+
+  app.post("/api/suricata/start", async (req, res) => {
+    const { suricataService } = await import("./suricata-service");
+    const started = suricataService.start();
+    res.json({ success: started });
+  });
+
+  app.post("/api/suricata/stop", async (req, res) => {
+    const { suricataService } = await import("./suricata-service");
+    suricataService.stop();
+    res.json({ success: true });
+  });
+
+  // Suricata device traffic (24/7 monitoring)
+  app.get("/api/suricata/traffic", async (req, res) => {
+    const { suricataService } = await import("./suricata-service");
+    res.json(suricataService.getAllDeviceTraffic());
+  });
+
+  app.get("/api/suricata/traffic/:ip", async (req, res) => {
+    const { suricataService } = await import("./suricata-service");
+    const traffic = suricataService.getDeviceTraffic(req.params.ip);
+    if (traffic) {
+      res.json(traffic);
+    } else {
+      res.status(404).json({ error: "No traffic data for this IP" });
+    }
+  });
+
+  // Packet capture / live monitoring
+  app.post("/api/monitoring/start/:deviceId", async (req, res) => {
+    const deviceId = parseInt(req.params.deviceId);
+    const device = await storage.getDevice(deviceId);
+    if (!device) {
+      return res.status(404).json({ error: "Device not found" });
+    }
+
+    const { packetCaptureService } = await import("./packet-capture");
+    const started = await packetCaptureService.startCapture(device.ipAddress, undefined, deviceId);
+    res.json({ success: started, device: device.ipAddress, deviceId });
+  });
+
+  app.post("/api/monitoring/stop", async (req, res) => {
+    const { packetCaptureService } = await import("./packet-capture");
+    packetCaptureService.stopCapture();
+    res.json({ success: true });
+  });
+
+  app.get("/api/monitoring/status", async (req, res) => {
+    const { packetCaptureService } = await import("./packet-capture");
+    res.json(packetCaptureService.getStatus());
+  });
+
+  app.get("/api/monitoring/:deviceId/metrics", async (req, res) => {
+    const deviceId = parseInt(req.params.deviceId);
+    const device = await storage.getDevice(deviceId);
+    if (!device) {
+      return res.status(404).json({ error: "Device not found" });
+    }
+
+    const { packetCaptureService } = await import("./packet-capture");
+    const metrics = packetCaptureService.getDeviceMetrics(device.ipAddress);
+    res.json({
+      ...metrics,
+      deviceId,
+      deviceName: device.name,
+      macAddress: device.macAddress,
+      lastSeen: device.lastSeen,
+    });
+  });
+
+  app.get("/api/monitoring/:deviceId/packets", async (req, res) => {
+    const deviceId = parseInt(req.params.deviceId);
+    const device = await storage.getDevice(deviceId);
+    if (!device) {
+      return res.status(404).json({ error: "Device not found" });
+    }
+
+    const limit = parseInt(req.query.limit as string) || 50;
+    const { packetCaptureService } = await import("./packet-capture");
+    const packets = packetCaptureService.getRecentPackets(device.ipAddress, limit);
+    res.json(packets);
+  });
+
   // Network-wide blocking settings
   app.get("/api/network-block/settings", async (req, res) => {
     const { networkBlockService } = await import("./network-block");

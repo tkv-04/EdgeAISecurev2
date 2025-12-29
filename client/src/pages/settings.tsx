@@ -25,6 +25,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useTheme } from "@/lib/theme-context";
 import { useSettings } from "@/lib/settings-context";
 import { NetworkBlockingSettings } from "@/components/network-blocking-settings";
+import { TrafficMonitoringSettings } from "@/components/traffic-monitoring-settings";
 import type { Settings } from "@shared/schema";
 
 export default function SettingsPage() {
@@ -117,6 +118,7 @@ export default function SettingsPage() {
 
   const handleReset = () => {
     const defaultSettings: Settings = {
+      ...localSettings,
       anomalySensitivity: "medium",
       alertRefreshInterval: 5,
       theme: "light",
@@ -340,6 +342,7 @@ export default function SettingsPage() {
         </Card>
 
         <NetworkBlockingSettings />
+        <TrafficMonitoringSettings />
       </div>
 
       <Card>

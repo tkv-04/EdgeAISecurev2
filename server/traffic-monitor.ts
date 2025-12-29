@@ -2,9 +2,22 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import { readFile } from "fs/promises";
 import { storage } from "./storage";
-import { notificationService } from "./notification-service";
 
 const execAsync = promisify(exec);
+
+// ==================== Types ====================
+
+export type MonitoringMethod = "local" | "openwrt" | "arp";
+
+export interface TrafficMonitorSettings {
+    enabled: boolean;
+    method: MonitoringMethod;
+    intervalSeconds: number;
+    // OpenWRT settings (shared with network-block)
+    openwrtHost?: string;
+    openwrtUser?: string;
+    openwrtPassword?: string;
+}
 
 interface InterfaceStats {
     interface: string;
@@ -18,24 +31,45 @@ interface DeviceTrafficStats {
     deviceId: number;
     deviceName: string;
     ipAddress: string;
+    macAddress: string;
     bytesIn: number;
     bytesOut: number;
     packetsIn: number;
     packetsOut: number;
     lastUpdated: Date;
+    online: boolean;
 }
 
-// Store for tracking device traffic
-const deviceTrafficHistory = new Map<number, DeviceTrafficStats[]>();
-const lastInterfaceStats = new Map<string, InterfaceStats>();
+// ==================== State ====================
 
-/**
- * Read interface statistics from /proc/net/dev
- */
+let settings: TrafficMonitorSettings = {
+    enabled: true,
+    method: "arp",
+    intervalSeconds: 30,
+};
+
+// Cache for device traffic data
+const deviceTrafficCache = new Map<string, DeviceTrafficStats>();
+const iptablesRuleSetup = new Set<string>(); // Track which IPs have accounting rules
+
+// ==================== Settings ====================
+
+export function getTrafficMonitorSettings(): TrafficMonitorSettings {
+    return { ...settings };
+}
+
+export function updateTrafficMonitorSettings(updates: Partial<TrafficMonitorSettings>): TrafficMonitorSettings {
+    settings = { ...settings, ...updates };
+    console.log("[TrafficMonitor] Settings updated:", settings);
+    return settings;
+}
+
+// ==================== Interface Stats ====================
+
 export async function getInterfaceStats(): Promise<InterfaceStats[]> {
     try {
         const content = await readFile("/proc/net/dev", "utf-8");
-        const lines = content.trim().split("\n").slice(2); // Skip header lines
+        const lines = content.trim().split("\n").slice(2);
 
         return lines.map((line) => {
             const parts = line.trim().split(/\s+/);
@@ -48,114 +82,294 @@ export async function getInterfaceStats(): Promise<InterfaceStats[]> {
                 txBytes: parseInt(parts[9]) || 0,
                 txPackets: parseInt(parts[10]) || 0,
             };
-        }).filter((stat) => stat.interface !== "lo"); // Exclude loopback
+        }).filter((stat) => stat.interface !== "lo");
     } catch (error) {
         console.error("[TrafficMonitor] Error reading interface stats:", error);
         return [];
     }
 }
 
+// ==================== Local Mode (iptables counters) ====================
+
 /**
- * Get per-device traffic using IP accounting (if available)
- * Falls back to interface-level stats if not available
+ * Setup iptables accounting rules for a device
+ * Creates INPUT and OUTPUT rules to count traffic per IP
+ */
+async function setupIptablesAccounting(ipAddress: string): Promise<void> {
+    if (iptablesRuleSetup.has(ipAddress)) return;
+
+    try {
+        // Check if rule already exists
+        const { stdout } = await execAsync(
+            `sudo iptables -L -v -n 2>/dev/null | grep -c "${ipAddress}" || echo "0"`
+        );
+
+        if (parseInt(stdout.trim()) === 0) {
+            // Add accounting rules (ACCEPT to not block, just count)
+            await execAsync(`sudo iptables -A INPUT -s ${ipAddress} -j ACCEPT 2>/dev/null || true`);
+            await execAsync(`sudo iptables -A OUTPUT -d ${ipAddress} -j ACCEPT 2>/dev/null || true`);
+            console.log(`[TrafficMonitor] Added iptables accounting for ${ipAddress}`);
+        }
+
+        iptablesRuleSetup.add(ipAddress);
+    } catch (error) {
+        console.error(`[TrafficMonitor] Failed to setup iptables for ${ipAddress}:`, error);
+    }
+}
+
+/**
+ * Get traffic stats from iptables counters
+ */
+async function getIptablesTraffic(ipAddress: string): Promise<{ bytesIn: number; bytesOut: number; packetsIn: number; packetsOut: number }> {
+    try {
+        // Get INPUT chain stats (traffic FROM this IP)
+        const { stdout: inputStats } = await execAsync(
+            `sudo iptables -L INPUT -v -n -x 2>/dev/null | grep "${ipAddress}" | awk '{print $2, $1}' | head -1`
+        );
+
+        // Get OUTPUT chain stats (traffic TO this IP)
+        const { stdout: outputStats } = await execAsync(
+            `sudo iptables -L OUTPUT -v -n -x 2>/dev/null | grep "${ipAddress}" | awk '{print $2, $1}' | head -1`
+        );
+
+        const [bytesIn, packetsIn] = (inputStats.trim().split(" ").map(Number));
+        const [bytesOut, packetsOut] = (outputStats.trim().split(" ").map(Number));
+
+        return {
+            bytesIn: bytesIn || 0,
+            bytesOut: bytesOut || 0,
+            packetsIn: packetsIn || 0,
+            packetsOut: packetsOut || 0,
+        };
+    } catch {
+        return { bytesIn: 0, bytesOut: 0, packetsIn: 0, packetsOut: 0 };
+    }
+}
+
+// ==================== OpenWRT Mode ====================
+
+/**
+ * Get OpenWRT ubus session token
+ */
+async function openwrtLogin(): Promise<string | null> {
+    if (!settings.openwrtHost || !settings.openwrtUser || !settings.openwrtPassword) {
+        return null;
+    }
+
+    try {
+        const response = await fetch(`http://${settings.openwrtHost}/ubus`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: 1,
+                method: "call",
+                params: [
+                    "00000000000000000000000000000000",
+                    "session",
+                    "login",
+                    { username: settings.openwrtUser, password: settings.openwrtPassword },
+                ],
+            }),
+        });
+
+        const data = await response.json() as any;
+        if (data.result && data.result[0] === 0) {
+            return data.result[1]?.ubus_rpc_session || null;
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Get traffic stats from OpenWRT router
+ */
+async function getOpenwrtTraffic(): Promise<Map<string, { bytesIn: number; bytesOut: number }>> {
+    const trafficMap = new Map<string, { bytesIn: number; bytesOut: number }>();
+
+    const session = await openwrtLogin();
+    if (!session) {
+        console.log("[TrafficMonitor] OpenWRT login failed");
+        return trafficMap;
+    }
+
+    try {
+        // Try to get bandwidth stats from luci-bwc or network.device
+        const response = await fetch(`http://${settings.openwrtHost}/ubus`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: 1,
+                method: "call",
+                params: [session, "network.device", "status", {}],
+            }),
+        });
+
+        const data = await response.json() as any;
+        if (data.result && data.result[1]) {
+            // Parse device stats - structure varies by OpenWRT version
+            console.log("[TrafficMonitor] Got OpenWRT network stats");
+        }
+
+        // Alternative: Try to get DHCP leases with traffic
+        const leasesResponse = await fetch(`http://${settings.openwrtHost}/ubus`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: 1,
+                method: "call",
+                params: [session, "dhcp", "ipv4leases", {}],
+            }),
+        });
+
+        const leasesData = await leasesResponse.json() as any;
+        if (leasesData.result && leasesData.result[1]?.dhcp_leases) {
+            // We got DHCP leases but typically no per-client traffic
+            // Would need luci-app-nlbwmon or similar for real traffic stats
+            for (const lease of leasesData.result[1].dhcp_leases) {
+                trafficMap.set(lease.ipaddr, { bytesIn: 0, bytesOut: 0 });
+            }
+        }
+    } catch (error) {
+        console.error("[TrafficMonitor] OpenWRT traffic fetch error:", error);
+    }
+
+    return trafficMap;
+}
+
+// ==================== ARP Mode (Activity Only) ====================
+
+/**
+ * Check if device is online via ping
+ */
+async function pingDevice(ipAddress: string): Promise<boolean> {
+    try {
+        await execAsync(`ping -c 1 -W 1 ${ipAddress} > /dev/null 2>&1`);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Get ARP cache to see which devices have been seen
+ */
+async function getArpCache(): Promise<Map<string, string>> {
+    const arpMap = new Map<string, string>(); // IP -> MAC
+
+    try {
+        const { stdout } = await execAsync("cat /proc/net/arp 2>/dev/null");
+        const lines = stdout.trim().split("\n").slice(1);
+
+        for (const line of lines) {
+            const parts = line.split(/\s+/);
+            if (parts[2] !== "0x0") { // 0x0 means incomplete
+                arpMap.set(parts[0], parts[3].toLowerCase());
+            }
+        }
+    } catch {
+        // Ignore errors
+    }
+
+    return arpMap;
+}
+
+// ==================== Main Traffic Collection ====================
+
+/**
+ * Get per-device traffic stats using the configured method
  */
 export async function getDeviceTraffic(): Promise<DeviceTrafficStats[]> {
     const devices = await storage.getDevices();
     const approvedDevices = devices.filter((d) =>
-        ["approved", "active", "monitoring", "learning"].includes(d.status)
+        ["approved", "active", "monitoring", "learning", "anomalous"].includes(d.status)
     );
 
     const stats: DeviceTrafficStats[] = [];
+    const arpCache = await getArpCache();
 
-    for (const device of approvedDevices) {
-        // Try to get per-IP stats using netstat or conntrack
-        try {
-            const { stdout } = await execAsync(
-                `cat /proc/net/arp | grep -i "${device.macAddress.toLowerCase()}" 2>/dev/null || true`
-            );
+    switch (settings.method) {
+        case "local":
+            // Use iptables counters
+            for (const device of approvedDevices) {
+                await setupIptablesAccounting(device.ipAddress);
+                const traffic = await getIptablesTraffic(device.ipAddress);
+                const online = await pingDevice(device.ipAddress);
 
-            // For now, simulate traffic based on device activity
-            // In a real implementation, you'd use iptables counters or tcpdump
-            const baseTraffic = device.trafficRate || Math.floor(Math.random() * 1000);
+                stats.push({
+                    deviceId: device.id,
+                    deviceName: device.name,
+                    ipAddress: device.ipAddress,
+                    macAddress: device.macAddress,
+                    ...traffic,
+                    lastUpdated: new Date(),
+                    online,
+                });
+            }
+            break;
 
-            stats.push({
-                deviceId: device.id,
-                deviceName: device.name,
-                ipAddress: device.ipAddress,
-                bytesIn: baseTraffic * 100,
-                bytesOut: baseTraffic * 80,
-                packetsIn: baseTraffic,
-                packetsOut: Math.floor(baseTraffic * 0.8),
-                lastUpdated: new Date(),
-            });
-        } catch {
-            // Device not found in ARP
-        }
+        case "openwrt":
+            // Pull from OpenWRT router
+            const openwrtTraffic = await getOpenwrtTraffic();
+            for (const device of approvedDevices) {
+                const traffic = openwrtTraffic.get(device.ipAddress) || { bytesIn: 0, bytesOut: 0 };
+                const online = arpCache.has(device.ipAddress);
+
+                stats.push({
+                    deviceId: device.id,
+                    deviceName: device.name,
+                    ipAddress: device.ipAddress,
+                    macAddress: device.macAddress,
+                    bytesIn: traffic.bytesIn,
+                    bytesOut: traffic.bytesOut,
+                    packetsIn: 0,
+                    packetsOut: 0,
+                    lastUpdated: new Date(),
+                    online,
+                });
+            }
+            break;
+
+        case "arp":
+        default:
+            // Just track online status via ARP/ping
+            for (const device of approvedDevices) {
+                const inArp = arpCache.has(device.ipAddress);
+                const online = inArp || await pingDevice(device.ipAddress);
+
+                // Use cached values or device's stored traffic rate
+                const cached = deviceTrafficCache.get(device.ipAddress);
+
+                stats.push({
+                    deviceId: device.id,
+                    deviceName: device.name,
+                    ipAddress: device.ipAddress,
+                    macAddress: device.macAddress,
+                    bytesIn: cached?.bytesIn || 0,
+                    bytesOut: cached?.bytesOut || 0,
+                    packetsIn: cached?.packetsIn || 0,
+                    packetsOut: cached?.packetsOut || 0,
+                    lastUpdated: new Date(),
+                    online,
+                });
+
+                // Update cache
+                if (stats.length > 0) {
+                    deviceTrafficCache.set(device.ipAddress, stats[stats.length - 1]);
+                }
+            }
+            break;
     }
 
     return stats;
 }
 
 /**
- * Track device online/offline status
- */
-export async function checkDeviceOnlineStatus(): Promise<void> {
-    const devices = await storage.getDevices();
-    const approvedDevices = devices.filter((d) =>
-        ["approved", "active", "monitoring", "learning"].includes(d.status)
-    );
-
-    for (const device of approvedDevices) {
-        try {
-            // Ping with short timeout
-            await execAsync(`ping -c 1 -W 1 ${device.ipAddress} > /dev/null 2>&1`);
-            // Device is online - update last seen
-            await storage.updateDeviceMetrics(device.id, device.trafficRate);
-        } catch {
-            // Device didn't respond - check if it's been offline for a while
-            const lastSeen = new Date(device.lastSeen);
-            const now = new Date();
-            const minutesSinceLastSeen = (now.getTime() - lastSeen.getTime()) / 60000;
-
-            if (minutesSinceLastSeen > 5) {
-                // Notify if device has been offline for more than 5 minutes
-                // (Only notify once by checking if we've already notified)
-                console.log(`[TrafficMonitor] Device offline: ${device.name} (${minutesSinceLastSeen.toFixed(1)} minutes)`);
-            }
-        }
-    }
-}
-
-/**
- * Calculate total network throughput
- */
-export function calculateThroughput(
-    prev: InterfaceStats,
-    current: InterfaceStats,
-    intervalSeconds: number
-): { rxBps: number; txBps: number } {
-    const rxBytes = current.rxBytes - prev.rxBytes;
-    const txBytes = current.txBytes - prev.txBytes;
-
-    return {
-        rxBps: Math.max(0, rxBytes / intervalSeconds),
-        txBps: Math.max(0, txBytes / intervalSeconds),
-    };
-}
-
-/**
- * Format bytes to human readable
- */
-export function formatBytes(bytes: number): string {
-    if (bytes === 0) return "0 B";
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-}
-
-/**
- * Get network summary
+ * Get network summary stats
  */
 export async function getNetworkSummary(): Promise<{
     totalRxBytes: number;
@@ -164,12 +378,11 @@ export async function getNetworkSummary(): Promise<{
     totalTxPackets: number;
     interfaces: InterfaceStats[];
     activeDevices: number;
+    method: MonitoringMethod;
 }> {
     const stats = await getInterfaceStats();
-    const devices = await storage.getDevices();
-    const activeDevices = devices.filter((d) =>
-        ["approved", "active", "monitoring", "learning"].includes(d.status)
-    ).length;
+    const deviceTraffic = await getDeviceTraffic();
+    const onlineDevices = deviceTraffic.filter((d) => d.online).length;
 
     const totals = stats.reduce(
         (acc, stat) => ({
@@ -184,15 +397,29 @@ export async function getNetworkSummary(): Promise<{
     return {
         ...totals,
         interfaces: stats,
-        activeDevices,
+        activeDevices: onlineDevices,
+        method: settings.method,
     };
 }
 
-// Export for API
+/**
+ * Format bytes to human readable
+ */
+export function formatBytes(bytes: number): string {
+    if (bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+}
+
+// ==================== Export ====================
+
 export const trafficMonitor = {
+    getSettings: getTrafficMonitorSettings,
+    updateSettings: updateTrafficMonitorSettings,
     getInterfaceStats,
     getDeviceTraffic,
-    checkDeviceOnlineStatus,
     getNetworkSummary,
     formatBytes,
 };
