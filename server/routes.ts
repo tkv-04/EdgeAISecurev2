@@ -182,6 +182,19 @@ export async function registerRoutes(
     }
   });
 
+  // Historical flow data (from database - persisted for 3 days)
+  app.get("/api/flows", async (req, res) => {
+    const limit = parseInt(req.query.limit as string) || 100;
+    const flows = await storage.getFlowEvents(limit);
+    res.json(flows);
+  });
+
+  app.get("/api/flows/:ip", async (req, res) => {
+    const limit = parseInt(req.query.limit as string) || 50;
+    const flows = await storage.getFlowEventsByIp(req.params.ip, limit);
+    res.json(flows);
+  });
+
   // Packet capture / live monitoring
   app.post("/api/monitoring/start/:deviceId", async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);
@@ -548,8 +561,13 @@ export async function registerRoutes(
             newDevice.id
           );
         } else {
-          // Update last seen for existing device
-          await storage.updateDeviceMetrics(existingDevice.id, existingDevice.trafficRate);
+          // Update last seen and IP address if changed (DHCP may assign new IP)
+          if (existingDevice.ipAddress !== discovered.ipAddress) {
+            await storage.updateDeviceIp(existingDevice.id, discovered.ipAddress);
+            console.log(`[Scan] Updated IP for ${existingDevice.name}: ${existingDevice.ipAddress} -> ${discovered.ipAddress}`);
+          } else {
+            await storage.updateDeviceMetrics(existingDevice.id, existingDevice.trafficRate);
+          }
         }
       }
 

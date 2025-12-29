@@ -68,6 +68,7 @@ export const trafficData = pgTable("traffic_data", {
   timestamp: timestamp("timestamp").notNull().defaultNow(),
   deviceId: integer("device_id").notNull(),
   packetsPerSecond: integer("packets_per_second").notNull(),
+  bytesPerSecond: integer("bytes_per_second").notNull().default(0),
 });
 
 // Packet events table
@@ -80,6 +81,18 @@ export const packetEvents = pgTable("packet_events", {
   destIp: text("dest_ip").notNull(),
   size: integer("size").notNull(),
   direction: text("direction").notNull(),
+});
+
+// Flow events table (Suricata flows - persisted for 3 days)
+export const flowEvents = pgTable("flow_events", {
+  id: serial("id").primaryKey(),
+  timestamp: timestamp("timestamp").notNull().defaultNow(),
+  srcIp: text("src_ip").notNull(),
+  destIp: text("dest_ip").notNull(),
+  protocol: text("protocol").notNull(),
+  bytesToServer: integer("bytes_to_server").notNull().default(0),
+  bytesToClient: integer("bytes_to_client").notNull().default(0),
+  totalBytes: integer("total_bytes").notNull().default(0),
 });
 
 // Users table
@@ -165,6 +178,9 @@ export type InsertTrafficData = z.infer<typeof insertTrafficDataSchema>;
 export const insertPacketEventSchema = createInsertSchema(packetEvents).omit({ id: true });
 export type InsertPacketEvent = z.infer<typeof insertPacketEventSchema>;
 
+export const insertFlowEventSchema = createInsertSchema(flowEvents).omit({ id: true });
+export type InsertFlowEvent = z.infer<typeof insertFlowEventSchema>;
+
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
 export type InsertUser = z.infer<typeof insertUserSchema>;
 
@@ -180,6 +196,7 @@ export type QuarantineRecord = typeof quarantineRecords.$inferSelect;
 export type LogEntry = typeof logs.$inferSelect;
 export type TrafficDataPoint = typeof trafficData.$inferSelect;
 export type PacketEvent = typeof packetEvents.$inferSelect;
+export type FlowEvent = typeof flowEvents.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type Settings = typeof settings.$inferSelect;
 

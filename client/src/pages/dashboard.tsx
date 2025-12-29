@@ -44,14 +44,17 @@ import type { Device, DashboardStats, TrafficDataPoint, DeviceStatus } from "@sh
 export default function DashboardPage() {
   const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
     queryKey: ["/api/dashboard/stats"],
+    refetchInterval: 30000, // Refresh every 30 seconds
   });
 
   const { data: devices, isLoading: devicesLoading } = useQuery<Device[]>({
     queryKey: ["/api/devices"],
+    refetchInterval: 30000,
   });
 
   const { data: trafficData, isLoading: trafficLoading } = useQuery<TrafficDataPoint[]>({
     queryKey: ["/api/traffic"],
+    refetchInterval: 10000, // Refresh traffic data every 10 seconds
   });
 
   // Device selection state - default to first 4 devices
@@ -60,7 +63,7 @@ export default function DashboardPage() {
   // Initialize selected devices when devices load - only approved devices
   useEffect(() => {
     if (devices && devices.length > 0 && selectedDeviceIds.size === 0) {
-      // Filter to only approved devices (not new or blocked)
+      // Filter to only approved devices
       const approvedStatuses = ["approved", "active", "monitoring", "learning", "anomalous"];
       const approvedDevices = devices.filter(d => approvedStatuses.includes(d.status));
       const defaultIds = new Set(approvedDevices.slice(0, 4).map(d => d.id));
@@ -81,30 +84,39 @@ export default function DashboardPage() {
   };
 
   const formatTrafficData = () => {
-    if (!trafficData || !devices || selectedDeviceIds.size === 0) return [];
+    if (!trafficData || !devices || selectedDeviceIds.size === 0) {
+      console.log("[Dashboard] No data:", { trafficData: !!trafficData, devices: !!devices, selectedSize: selectedDeviceIds.size });
+      return [];
+    }
 
     // Get selected devices
     const selectedDevices = devices.filter(d => selectedDeviceIds.has(d.id));
+    console.log("[Dashboard] Selected devices:", selectedDevices.map(d => ({ id: d.id, name: d.name })));
     if (selectedDevices.length === 0) return [];
 
-    // Filter and sort traffic data by timestamp
+    // Filter and sort traffic data by timestamp - only last 2 hours
+    const twoHoursAgo = new Date();
+    twoHoursAgo.setHours(twoHoursAgo.getHours() - 2);
+    
     const filteredData = trafficData
       .filter(point => selectedDeviceIds.has(point.deviceId))
+      .filter(point => new Date(point.timestamp) >= twoHoursAgo)
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
+    console.log("[Dashboard] Filtered traffic data (last 2h):", filteredData.length, "points for devices:", Array.from(selectedDeviceIds));
     if (filteredData.length === 0) return [];
 
     // Group traffic data by timestamp (rounded to nearest 5 minutes for cleaner display)
-    const timeGroups: Map<string, Map<number, number[]>> = new Map();
+    const timeGroups: Map<number, Map<number, number[]>> = new Map();
     
     filteredData.forEach((point) => {
       const date = new Date(point.timestamp);
-      // Round to nearest 5 minutes for cleaner display
-      const roundedMinutes = Math.floor(date.getMinutes() / 5) * 5;
+      // Round to nearest 5 minutes for cleaner display (in local time)
       const roundedDate = new Date(date);
-      roundedDate.setMinutes(roundedMinutes, 0, 0);
+      roundedDate.setMinutes(Math.floor(date.getMinutes() / 5) * 5, 0, 0);
       
-      const timeKey = roundedDate.toISOString();
+      // Use epoch milliseconds as key for proper sorting
+      const timeKey = roundedDate.getTime();
       
       if (!timeGroups.has(timeKey)) {
         timeGroups.set(timeKey, new Map());
@@ -114,18 +126,22 @@ export default function DashboardPage() {
       if (!deviceData.has(point.deviceId)) {
         deviceData.set(point.deviceId, []);
       }
-      deviceData.get(point.deviceId)!.push(point.packetsPerSecond);
+      // Store bytes converted to KB for display
+      deviceData.get(point.deviceId)!.push(Math.round((point.bytesPerSecond || 0) / 1024));
     });
 
     // Convert to array format and ensure all devices have values for all time points
-    const timeKeys = Array.from(timeGroups.keys()).sort();
+    const timeKeys = Array.from(timeGroups.keys()).sort((a, b) => a - b);
     const chartData = timeKeys.map(timeKey => {
       const deviceData = timeGroups.get(timeKey)!;
+      // Format time using native Date (should use browser timezone)
+      const time = new Date(timeKey);
+      const hours = time.getHours();
+      const minutes = time.getMinutes();
+      const period = hours >= 12 ? "PM" : "AM";
+      const hour12 = hours % 12 || 12;
       const dataPoint: Record<string, string | number> = {
-        time: new Date(timeKey).toLocaleTimeString("en-US", {
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
+        time: `${hour12}:${minutes.toString().padStart(2, "0")} ${period}`,
       };
       
       // Add value for each selected device (average if multiple values, 0 if no data)
@@ -145,6 +161,7 @@ export default function DashboardPage() {
   };
 
   const chartData = formatTrafficData();
+  console.log("[Dashboard] chartData:", chartData.slice(0, 5)); // Log first 5 entries
   const selectedDevices = devices?.filter(d => selectedDeviceIds.has(d.id)) || [];
   // Filter to only show approved devices in the device selector and charts
   const approvedStatuses = ["approved", "active", "monitoring", "learning", "anomalous"];
@@ -280,7 +297,7 @@ export default function DashboardPage() {
                     tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
                     axisLine={{ stroke: "hsl(var(--border))" }}
                     label={{
-                      value: "Packets/sec",
+                      value: "KB/sec",
                       angle: -90,
                       position: "insideLeft",
                       style: { fontSize: 12, fill: "hsl(var(--muted-foreground))" },

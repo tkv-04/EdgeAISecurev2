@@ -291,6 +291,20 @@ class SuricataReaderService extends EventEmitter {
         updateDevice(srcIp, true);
         updateDevice(destIp, false);
 
+        // Persist flow to database (async, don't block)
+        const totalBytes = bytesToServer + bytesToClient;
+        storage.addFlowEvent({
+            timestamp,
+            srcIp,
+            destIp,
+            protocol,
+            bytesToServer,
+            bytesToClient,
+            totalBytes,
+        }).catch(() => {
+            // Silently ignore errors to avoid spam
+        });
+
         // Emit event
         this.emit("flow", { srcIp, destIp, protocol, bytesToServer, bytesToClient });
     }
@@ -345,3 +359,62 @@ exec("systemctl is-active suricata", (error, stdout) => {
         suricataService.start();
     }
 });
+
+// Cleanup old flows every hour (keep 3 days)
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const DAYS_TO_KEEP = 3;
+
+setInterval(async () => {
+    try {
+        const deleted = await storage.cleanupOldFlowEvents(DAYS_TO_KEEP);
+        if (deleted > 0) {
+            console.log(`[Suricata] Cleaned up ${deleted} flow events older than ${DAYS_TO_KEEP} days`);
+        }
+    } catch (error) {
+        // Silently ignore cleanup errors
+    }
+}, CLEANUP_INTERVAL_MS);
+
+// Traffic tracking for dashboard graph
+// Collect bytes and flow counts per device every 30 seconds
+const TRAFFIC_INTERVAL_MS = 30 * 1000; // 30 seconds
+const devicePrevBytes = new Map<string, number>(); // Track previous total bytes
+const devicePrevFlows = new Map<string, number>(); // Track previous flow counts
+
+setInterval(async () => {
+    try {
+        const allDevices = await storage.getDevices();
+        const allTraffic = suricataService.getAllDeviceTraffic();
+
+        for (const traffic of allTraffic) {
+            // Find device by IP
+            const device = allDevices.find(d => d.ipAddress === traffic.ipAddress);
+            if (!device) continue;
+
+            // Calculate bytes since last check
+            const totalBytes = traffic.bytesIn + traffic.bytesOut;
+            const prevBytes = devicePrevBytes.get(traffic.ipAddress) || 0;
+            const bytesSinceLastCheck = totalBytes - prevBytes;
+            devicePrevBytes.set(traffic.ipAddress, totalBytes);
+
+            // Calculate flows since last check
+            const prevFlows = devicePrevFlows.get(traffic.ipAddress) || 0;
+            const flowsSinceLastCheck = traffic.flowCount - prevFlows;
+            devicePrevFlows.set(traffic.ipAddress, traffic.flowCount);
+
+            // Always record (even if 0) to keep continuous data
+            const intervalSeconds = TRAFFIC_INTERVAL_MS / 1000;
+            const bps = Math.round(bytesSinceLastCheck / intervalSeconds);
+            const fps = Math.round(flowsSinceLastCheck / intervalSeconds);
+
+            // Save to trafficData table
+            await storage.addTrafficData({
+                deviceId: device.id,
+                packetsPerSecond: fps,
+                bytesPerSecond: bps,
+            });
+        }
+    } catch (error) {
+        // Silently ignore collection errors
+    }
+}, TRAFFIC_INTERVAL_MS);

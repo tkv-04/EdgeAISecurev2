@@ -73,8 +73,13 @@ async function runScan(): Promise<number> {
 
                 newDevicesCount++;
             } else {
-                // Update last seen
-                await storage.updateDeviceMetrics(existingDevice.id, existingDevice.trafficRate);
+                // Update last seen and IP address if changed (DHCP may assign new IP)
+                if (existingDevice.ipAddress !== discovered.ipAddress) {
+                    await storage.updateDeviceIp(existingDevice.id, discovered.ipAddress);
+                    console.log(`[BackgroundScanner] Updated IP for ${existingDevice.name}: ${existingDevice.ipAddress} -> ${discovered.ipAddress}`);
+                } else {
+                    await storage.updateDeviceMetrics(existingDevice.id, existingDevice.trafficRate);
+                }
             }
         }
 

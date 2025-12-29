@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { eq, desc, and, gte, lte, sql } from "drizzle-orm";
+import { eq, desc, and, gte, lte, sql, lt } from "drizzle-orm";
 import {
   devices,
   deviceGroups,
@@ -8,6 +8,7 @@ import {
   logs,
   trafficData,
   packetEvents,
+  flowEvents,
   users,
   settings,
   type Device,
@@ -17,6 +18,7 @@ import {
   type LogEntry,
   type TrafficDataPoint,
   type PacketEvent,
+  type FlowEvent,
   type User,
   type Settings,
   type InsertDevice,
@@ -26,6 +28,7 @@ import {
   type InsertLogEntry,
   type InsertTrafficData,
   type InsertPacketEvent,
+  type InsertFlowEvent,
   type InsertUser,
   type InsertSettings,
   type DeviceStatus,
@@ -41,6 +44,7 @@ export interface IStorage {
   createDevice(device: InsertDevice): Promise<Device>;
   updateDeviceStatus(id: number, status: DeviceStatus): Promise<Device | undefined>;
   updateDeviceMetrics(id: number, trafficRate: number): Promise<Device | undefined>;
+  updateDeviceIp(id: number, ipAddress: string): Promise<Device | undefined>;
   updateDeviceGroup(id: number, groupId: number | null): Promise<Device | undefined>;
   deleteDevice(id: number): Promise<boolean>;
   getDeviceByMac(macAddress: string): Promise<Device | undefined>;
@@ -75,6 +79,12 @@ export interface IStorage {
   getPacketEvents(deviceId: number): Promise<PacketEvent[]>;
   addTrafficData(data: InsertTrafficData): Promise<TrafficDataPoint>;
   addPacketEvent(event: InsertPacketEvent): Promise<PacketEvent>;
+
+  // Flow Events (Suricata)
+  addFlowEvent(event: InsertFlowEvent): Promise<FlowEvent>;
+  getFlowEvents(limit?: number): Promise<FlowEvent[]>;
+  getFlowEventsByIp(ipAddress: string, limit?: number): Promise<FlowEvent[]>;
+  cleanupOldFlowEvents(daysToKeep: number): Promise<number>;
 
   // Users
   getUserByEmail(email: string): Promise<User | undefined>;
@@ -191,6 +201,15 @@ export class DatabaseStorage implements IStorage {
     const [device] = await db
       .update(devices)
       .set({ trafficRate, lastSeen: new Date() })
+      .where(eq(devices.id, id))
+      .returning();
+    return device;
+  }
+
+  async updateDeviceIp(id: number, ipAddress: string): Promise<Device | undefined> {
+    const [device] = await db
+      .update(devices)
+      .set({ ipAddress, lastSeen: new Date() })
       .where(eq(devices.id, id))
       .returning();
     return device;
@@ -370,6 +389,41 @@ export class DatabaseStorage implements IStorage {
   async addPacketEvent(event: InsertPacketEvent): Promise<PacketEvent> {
     const [newEvent] = await db.insert(packetEvents).values(event).returning();
     return newEvent;
+  }
+
+  // Flow Events (Suricata)
+  async addFlowEvent(event: InsertFlowEvent): Promise<FlowEvent> {
+    const [newEvent] = await db.insert(flowEvents).values(event).returning();
+    return newEvent;
+  }
+
+  async getFlowEvents(limit = 100): Promise<FlowEvent[]> {
+    return await db
+      .select()
+      .from(flowEvents)
+      .orderBy(desc(flowEvents.timestamp))
+      .limit(limit);
+  }
+
+  async getFlowEventsByIp(ipAddress: string, limit = 50): Promise<FlowEvent[]> {
+    return await db
+      .select()
+      .from(flowEvents)
+      .where(sql`${flowEvents.srcIp} = ${ipAddress} OR ${flowEvents.destIp} = ${ipAddress}`)
+      .orderBy(desc(flowEvents.timestamp))
+      .limit(limit);
+  }
+
+  async cleanupOldFlowEvents(daysToKeep: number): Promise<number> {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
+
+    const result = await db
+      .delete(flowEvents)
+      .where(lt(flowEvents.timestamp, cutoffDate))
+      .returning({ id: flowEvents.id });
+
+    return result.length;
   }
 
   // User methods
