@@ -64,29 +64,37 @@ Your Network
 
 ## Quick Start
 
-```bash
+
 # 1. Clone and install
+```
 git clone https://github.com/tkv-04/EdgeAISecurev2.git
 cd EdgeAISecurev2
 npm install
+```
 
 # 2. Create .env file
+```
 cp .env.example .env
+```
 # Or create manually with:
+```
 cat > .env << EOF
 DATABASE_URL=postgresql://postgres:password@localhost:5432/edgeaisecure
 PORT=5000
 NODE_ENV=development
 EOF
-
+```
 # 3. Install Pi-hole (optional but recommended)
+```
 curl -sSL https://install.pi-hole.net | sudo bash
 sudo pihole setpassword 'your-password'
-
+```
 # 4. Start the app
+```
 npm run dev
-
+```
 # 5. Open in browser
+```
 http://localhost:5000
 ```
 
