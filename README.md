@@ -27,8 +27,8 @@ Your Network
 │  │  • Monitors behavior              │  │
 │  │  • Blocks suspicious devices      │  │
 │  └───────────────────────────────────┘  │
-│                  │                       │
-│                  ▼                       │
+│                  │                      │
+│                  ▼                      │
 │  ┌───────────────────────────────────┐  │
 │  │          Pi-hole DNS              │  │
 │  │  • Blocks ads network-wide        │  │
