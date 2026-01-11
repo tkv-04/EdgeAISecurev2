@@ -127,11 +127,77 @@ http://localhost:5000
 
 ## Tech Stack
 
-- **Frontend:** React + TypeScript + Vite
-- **Backend:** Express.js + TypeScript
-- **Blocking:** Pi-hole API, iptables
+- **Frontend:** React + TypeScript + Vite + Recharts
+- **Backend:** Express.js + TypeScript + Drizzle ORM
+- **Database:** PostgreSQL (flow data, traffic stats, device info)
+- **IDS:** Suricata (network intrusion detection)
+- **Blocking:** Pi-hole API, iptables, ARP
 - **Scanning:** ARP, ping, port scanning
-- **Hardware:** Raspberry Pi (any model with network)
+- **Hardware:** Raspberry Pi (tested on Pi 5)
+
+## Gateway Configuration
+
+The Pi can act as a network gateway to monitor all IoT traffic.
+
+### Network Architecture
+```
+Internet Source
+      │
+      ▼
+┌─────────────┐
+│  OpenWRT    │◄──── IoT Devices
+│   Router    │
+└──────┬──────┘
+       │ LAN
+       ▼
+┌─────────────┐
+│ Raspberry Pi│ ◄── Gateway (192.168.31.217)
+│  (Suricata) │     Monitors all traffic
+└─────────────┘
+```
+
+### Configure Gateway
+Use the included script to configure the Pi as a gateway:
+
+```bash
+# Configure for your router
+sudo ./scripts/configure-gateway.sh <router_ip> <pi_ip>
+
+# Example: OpenWRT at 192.168.31.1, Pi at 192.168.31.217
+sudo ./scripts/configure-gateway.sh 192.168.31.1 192.168.31.217
+
+# Check status
+sudo ./scripts/configure-gateway.sh 192.168.31.1 192.168.31.217 status
+
+# Reset to DHCP
+sudo ./scripts/configure-gateway.sh 192.168.31.1 192.168.31.217 reset
+```
+
+### OpenWRT DHCP Configuration
+Set Pi's IP as the gateway for IoT devices in OpenWRT:
+1. Go to OpenWRT → Network → DHCP
+2. Set Gateway to Pi's IP (e.g., 192.168.31.217)
+3. IoT devices will route through Pi for monitoring
+
+## Suricata IDS Integration
+
+Real-time network intrusion detection with Suricata:
+
+### Features
+- **Flow Monitoring:** Track all network flows (source, dest, protocol, bytes)
+- **Traffic Analysis:** KB/sec graphs per device on dashboard
+- **Alert Detection:** Security alerts from Suricata rules
+- **Data Persistence:** 3-day retention in PostgreSQL
+
+### API Endpoints
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/suricata/status` | Suricata running status |
+| `GET /api/suricata/stats` | Traffic statistics |
+| `GET /api/suricata/alerts` | Security alerts |
+| `GET /api/suricata/traffic` | Per-device traffic data |
+| `GET /api/flows` | Historical flow events |
+| `GET /api/flows/:ip` | Flows for specific IP |
 
 ## Project Structure
 
@@ -139,20 +205,39 @@ http://localhost:5000
 ├── server/
 │   ├── network-scanner.ts    # Device discovery
 │   ├── network-block.ts      # Blocking logic
+│   ├── suricata-service.ts   # Suricata EVE reader
 │   ├── notification-service.ts
+│   ├── storage.ts            # Database operations
 │   └── routes.ts             # API endpoints
 ├── client/
 │   └── src/pages/
-│       ├── dashboard.tsx     # Main dashboard
+│       ├── dashboard.tsx     # Traffic graphs
 │       ├── devices.tsx       # Device management
+│       ├── monitoring.tsx    # Live monitoring
 │       └── settings.tsx      # Configuration
+├── scripts/
+│   └── configure-gateway.sh  # Gateway setup script
+├── shared/
+│   └── schema.ts             # Database schema
 └── README.md
 ```
+
+## Database Tables
+
+| Table | Purpose | Retention |
+|-------|---------|-----------|
+| `devices` | Discovered network devices | Permanent |
+| `flow_events` | Suricata flow data | 3 days |
+| `traffic_data` | KB/sec per device | Permanent |
+| `alerts` | Security alerts | Permanent |
+| `logs` | System event logs | Permanent |
 
 ## Requirements
 
 - Raspberry Pi (tested on Pi 5)
 - Node.js 18+
+- PostgreSQL
+- Suricata (for IDS features)
 - Pi-hole (optional, for DNS blocking)
 
 ## Roadmap
@@ -161,7 +246,10 @@ http://localhost:5000
 - [x] Notification system
 - [x] Pi-hole integration
 - [x] Zone-based blocking (quarantine vs block)
-- [ ] OpenWRT router integration
+- [x] Suricata IDS integration
+- [x] Flow data persistence (3-day retention)
+- [x] Gateway configuration script
+- [x] Traffic graphs (KB/sec per device)
 - [ ] Edge AI anomaly detection model
 - [ ] Mobile app
 
@@ -172,3 +260,4 @@ MIT
 ---
 
 *Built for securing home IoT networks with a Raspberry Pi.*
+
