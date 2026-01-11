@@ -245,7 +245,17 @@ class SuricataReaderService extends EventEmitter {
      * Process flow event - track per-device traffic
      */
     private processFlow(event: any): void {
-        const protocol = event.app_proto || "unknown";
+        // Use 'proto' field for transport layer (TCP, UDP, ICMP)
+        // Use 'app_proto' for application layer (http, dns, tls) as enhancement
+        const transportProto = event.proto || "unknown";  // TCP, UDP, ICMP, etc.
+        const appProto = event.app_proto;  // http, dns, tls, quic, etc.
+
+        // Prefer app_proto if available and not 'failed', otherwise use transport proto
+        let protocol = transportProto.toLowerCase();
+        if (appProto && appProto !== "failed") {
+            protocol = appProto.toLowerCase();  // Use more specific app protocol
+        }
+
         if (protocol === "failed") return;
 
         const srcIp = event.src_ip;

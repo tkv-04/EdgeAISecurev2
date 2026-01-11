@@ -207,7 +207,33 @@ export async function registerRoutes(
     res.json({ success });
   });
 
-  // Packet capture / live monitoring
+  // ==================== AI MODEL ENDPOINTS ====================
+  app.get("/api/ai/model/:deviceId", async (req, res) => {
+    const deviceId = parseInt(req.params.deviceId);
+    if (isNaN(deviceId)) {
+      return res.status(400).json({ error: "Invalid device ID" });
+    }
+
+    const { getModelSummary } = await import("./ai-anomaly-detector");
+    const summary = getModelSummary(deviceId);
+    res.json(summary);
+  });
+
+  app.get("/api/ai/learning-status", async (_req, res) => {
+    const { getAllLearningStatus } = await import("./baseline-service");
+    const status = getAllLearningStatus();
+    res.json(status);
+  });
+
+  app.get("/api/ai/models", async (_req, res) => {
+    const { getAllModelIds, getModelSummary } = await import("./ai-anomaly-detector");
+    const modelIds = getAllModelIds();
+    const models = modelIds.map(id => ({
+      deviceId: id,
+      ...getModelSummary(id),
+    }));
+    res.json(models);
+  });
   app.post("/api/monitoring/start/:deviceId", async (req, res) => {
     const deviceId = parseInt(req.params.deviceId);
     const device = await storage.getDevice(deviceId);

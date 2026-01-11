@@ -1,12 +1,11 @@
 /**
  * Edge AI Anomaly Detector
  * 
- * Implements statistical learning for behavioral anomaly detection:
- * - Z-Score anomaly detection for traffic rates
- * - Time-of-day pattern learning
- * - Protocol distribution analysis
- * - Destination entropy calculation
- * - Composite anomaly scoring
+ * Implements multi-model anomaly detection:
+ * - Statistical learning (Z-Score, entropy)
+ * - Isolation Forest (unsupervised)
+ * - LSTM Autoencoder (sequence-based)
+ * - Ensemble scoring for robust detection
  */
 
 import type { DeviceBaseline } from "@shared/schema";
@@ -16,8 +15,15 @@ const Z_SCORE_THRESHOLD = 2.5;  // Flag values > 2.5 standard deviations
 const ENTROPY_THRESHOLD = 0.7;   // High entropy = suspicious
 const MIN_SAMPLES = 10;          // Minimum samples for reliable statistics
 
-// Weights for composite anomaly score
+// Weights for composite anomaly score (ensemble)
 const WEIGHTS = {
+    statistical: 0.40,    // Statistical analysis weight
+    isolationForest: 0.35, // Isolation Forest weight
+    lstm: 0.25,           // LSTM weight (when available)
+};
+
+// Sub-weights for statistical component
+const STAT_WEIGHTS = {
     traffic: 0.30,
     protocol: 0.30,
     destination: 0.20,
@@ -55,7 +61,7 @@ export interface DeviceBehaviorModel {
 }
 
 /**
- * Result of anomaly analysis
+ * Result of anomaly analysis (ensemble)
  */
 export interface AnomalyAnalysis {
     isAnomaly: boolean;
@@ -66,6 +72,11 @@ export interface AnomalyAnalysis {
         protocolScore: number;
         destinationScore: number;
         timePatternScore: number;
+    };
+    mlScores: {
+        statisticalScore: number;
+        isolationForestScore: number;
+        lstmScore: number;
     };
     reasons: string[];
 }
@@ -237,6 +248,11 @@ export function analyzeFlow(
                 destinationScore: 0,
                 timePatternScore: 0,
             },
+            mlScores: {
+                statisticalScore: 0,
+                isolationForestScore: 0,
+                lstmScore: 0,
+            },
             reasons: ["Insufficient data for analysis"],
         };
     }
@@ -292,12 +308,48 @@ export function analyzeFlow(
         reasons.push(`Activity at unusual hour: ${hour}:00 (no baseline data)`);
     }
 
-    // Calculate composite anomaly score
-    const anomalyScore =
-        WEIGHTS.traffic * trafficScore +
-        WEIGHTS.protocol * protocolScore +
-        WEIGHTS.destination * destinationScore +
-        WEIGHTS.timePattern * timePatternScore;
+    // Calculate statistical anomaly score
+    const statisticalScore =
+        STAT_WEIGHTS.traffic * trafficScore +
+        STAT_WEIGHTS.protocol * protocolScore +
+        STAT_WEIGHTS.destination * destinationScore +
+        STAT_WEIGHTS.timePattern * timePatternScore;
+
+    // Try to get ML model scores (if available)
+    let isolationForestScore = 0;
+    let lstmScore = 0;
+
+    try {
+        const { flowToFeatures, anomalyScore: ifScore } = require("./ml/isolation-forest");
+        const features = flowToFeatures(flow);
+        isolationForestScore = ifScore(deviceId, features);
+    } catch {
+        // Isolation Forest not available or not trained
+    }
+
+    try {
+        const { detectAnomaly } = require("./ml/lstm-detector");
+        const lstmResult = detectAnomaly(deviceId);
+        lstmScore = lstmResult.reconstructionError / (lstmResult.threshold * 2);
+        lstmScore = Math.min(1, lstmScore);
+    } catch {
+        // LSTM not available or not trained
+    }
+
+    // Ensemble scoring
+    const hasIsolationForest = isolationForestScore > 0;
+    const hasLSTM = lstmScore > 0;
+
+    let anomalyScore: number;
+    if (hasIsolationForest && hasLSTM) {
+        anomalyScore = WEIGHTS.statistical * statisticalScore +
+            WEIGHTS.isolationForest * isolationForestScore +
+            WEIGHTS.lstm * lstmScore;
+    } else if (hasIsolationForest) {
+        anomalyScore = 0.6 * statisticalScore + 0.4 * isolationForestScore;
+    } else {
+        anomalyScore = statisticalScore;
+    }
 
     // Calculate confidence based on data quality
     const confidence = Math.min(1, model.trafficSamples / 100);  // 100 samples = full confidence
@@ -311,6 +363,11 @@ export function analyzeFlow(
             protocolScore,
             destinationScore,
             timePatternScore,
+        },
+        mlScores: {
+            statisticalScore,
+            isolationForestScore,
+            lstmScore,
         },
         reasons,
     };

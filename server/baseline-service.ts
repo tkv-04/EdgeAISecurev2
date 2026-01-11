@@ -83,9 +83,28 @@ export function addFlowToLearning(deviceId: number, flow: {
     if (learning) {
         learning.flows.push(flow);
 
-        // Also feed to AI model for statistical learning
+        // Feed to AI model for statistical learning
         const { addFlowObservation } = require("./ai-anomaly-detector");
         addFlowObservation(deviceId, flow);
+
+        // Feed to Isolation Forest
+        try {
+            const { flowToFeatures, addTrainingSample } = require("./ml/isolation-forest");
+            const features = flowToFeatures(flow);
+            addTrainingSample(deviceId, features);
+        } catch { /* Isolation Forest not available */ }
+
+        // Feed to LSTM
+        try {
+            const { addTimestep } = require("./ml/lstm-detector");
+            addTimestep(deviceId, {
+                bytes: flow.bytes,
+                protocol: flow.destPort <= 443 ? flow.destPort / 443 : 0.5,
+                destPort: flow.destPort,
+                hour: flow.timestamp.getHours() / 24,
+                connectionCount: learning.flows.length,
+            });
+        } catch { /* LSTM not available */ }
     }
 }
 
@@ -155,6 +174,29 @@ async function completeBaselineLearning(deviceId: number): Promise<void> {
             details: `Baseline learning completed for ${device.name}. Analyzed ${learning.flows.length} flows. ` +
                 `Protocols: ${profile.protocols.join(", ")}. Avg traffic: ${profile.avgBytesPerSec.toFixed(1)} B/s`,
         });
+    }
+
+    // Train ML models
+    try {
+        const { trainForest, getForestSummary } = require("./ml/isolation-forest");
+        const trained = trainForest(deviceId);
+        if (trained) {
+            const summary = getForestSummary(deviceId);
+            console.log(`[BaselineService] Isolation Forest trained: ${summary.numTrees} trees`);
+        }
+    } catch (err) {
+        console.log(`[BaselineService] Isolation Forest training skipped:`, err);
+    }
+
+    try {
+        const { trainLSTM, getLSTMSummary } = require("./ml/lstm-detector");
+        const trained = await trainLSTM(deviceId);
+        if (trained) {
+            const summary = getLSTMSummary(deviceId);
+            console.log(`[BaselineService] LSTM trained: ${summary.sequenceCount} sequences, loss=${summary.lastLoss}`);
+        }
+    } catch (err) {
+        console.log(`[BaselineService] LSTM training skipped:`, err);
     }
 
     // Clean up

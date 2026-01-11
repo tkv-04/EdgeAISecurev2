@@ -248,7 +248,27 @@ export async function scanNetwork(iface?: string, deep: boolean = false): Promis
         }
 
         // Get devices from ARP
-        const devices = await runArpCommand();
+        let devices = await runArpCommand();
+
+        // Also discover via mDNS (for HomeAssistant, ESPHome, etc.)
+        const mdnsDevices = await discoverMdnsDevices();
+
+        // Merge mDNS devices with ARP devices (mDNS may find devices not in ARP)
+        for (const mdnsDevice of mdnsDevices) {
+            const exists = devices.some(d =>
+                d.ipAddress === mdnsDevice.ipAddress ||
+                d.macAddress === mdnsDevice.macAddress
+            );
+            if (!exists) {
+                devices.push(mdnsDevice);
+            } else {
+                // Update hostname if mDNS has a better name
+                const existing = devices.find(d => d.ipAddress === mdnsDevice.ipAddress);
+                if (existing && mdnsDevice.hostname && !existing.hostname) {
+                    existing.hostname = mdnsDevice.hostname;
+                }
+            }
+        }
 
         // Filter by interface if specified
         if (iface) {
@@ -258,6 +278,80 @@ export async function scanNetwork(iface?: string, deep: boolean = false): Promis
         return devices;
     } catch (error) {
         console.error("Error scanning network:", error);
+        return [];
+    }
+}
+
+/**
+ * Discover devices via mDNS (HomeAssistant, ESPHome, etc.)
+ */
+async function discoverMdnsDevices(): Promise<DiscoveredDevice[]> {
+    const devices: DiscoveredDevice[] = [];
+
+    try {
+        // Query for common IoT mDNS services
+        const services = [
+            "_home-assistant._tcp",     // HomeAssistant
+            "_esphomelib._tcp",         // ESPHome
+            "_hap._tcp",                // HomeKit devices
+            "_http._tcp",               // Generic HTTP devices
+            "_mqtt._tcp",               // MQTT brokers
+        ];
+
+        for (const service of services) {
+            try {
+                const { stdout } = await execAsync(
+                    `timeout 3 avahi-browse -rtp ${service} 2>/dev/null | grep "^=" | head -10`
+                );
+
+                for (const line of stdout.trim().split("\n")) {
+                    if (!line) continue;
+
+                    // Format: =;eth0;IPv4;DeviceName;_service._tcp;local;hostname.local;192.168.x.x;port;...
+                    const parts = line.split(";");
+                    if (parts.length >= 8) {
+                        const iface = parts[1];
+                        const name = parts[3];
+                        const hostname = parts[6]?.replace(/\.local$/, "");
+                        const ipAddress = parts[7];
+
+                        if (ipAddress && !ipAddress.includes(":")) {  // Skip IPv6
+                            devices.push({
+                                ipAddress,
+                                macAddress: "MDNS",  // Will be resolved by ARP later
+                                interface: iface,
+                                hostname: name || hostname,
+                            });
+                        }
+                    }
+                }
+            } catch {
+                // Service not found, continue to next
+            }
+        }
+
+        // Resolve MAC addresses for mDNS devices via ARP ping
+        for (const device of devices) {
+            if (device.macAddress === "MDNS") {
+                try {
+                    // Ping to populate ARP cache
+                    await execAsync(`ping -c 1 -W 1 ${device.ipAddress} 2>/dev/null`);
+                    const { stdout } = await execAsync(`arp -n ${device.ipAddress} 2>/dev/null | tail -1`);
+                    const match = stdout.match(/([0-9a-f:]{17})/i);
+                    if (match) {
+                        device.macAddress = match[1].toUpperCase();
+                    }
+                } catch {
+                    // Could not resolve MAC, will be "MDNS"
+                }
+            }
+        }
+
+        // Filter out devices we couldn't resolve MAC for
+        return devices.filter(d => d.macAddress !== "MDNS");
+
+    } catch (error) {
+        console.error("Error discovering mDNS devices:", error);
         return [];
     }
 }
