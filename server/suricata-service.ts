@@ -2,6 +2,7 @@ import { spawn, ChildProcess } from "child_process";
 import { EventEmitter } from "events";
 import { storage } from "./storage";
 import { notificationService } from "./notification-service";
+import { isDeviceLearning, addFlowToLearning, checkFlowForAnomaly, createAnomalyAlert } from "./baseline-service";
 
 // ==================== Types ====================
 
@@ -249,6 +250,7 @@ class SuricataReaderService extends EventEmitter {
 
         const srcIp = event.src_ip;
         const destIp = event.dest_ip;
+        const destPort = event.dest_port || 0;
         const bytesToServer = event.flow?.bytes_toserver || 0;
         const bytesToClient = event.flow?.bytes_toclient || 0;
         const timestamp = new Date(event.timestamp);
@@ -305,9 +307,70 @@ class SuricataReaderService extends EventEmitter {
             // Silently ignore errors to avoid spam
         });
 
+        // Baseline learning integration
+        // Check if source device is learning and add flow data
+        this.processFlowForBaseline(srcIp, {
+            protocol,
+            destIp,
+            destPort,
+            bytes: totalBytes,
+            timestamp,
+        });
+
         // Emit event
         this.emit("flow", { srcIp, destIp, protocol, bytesToServer, bytesToClient });
     }
+
+    /**
+     * Process a flow for baseline learning and anomaly detection
+     */
+    private async processFlowForBaseline(deviceIp: string, flow: {
+        protocol: string;
+        destIp: string;
+        destPort: number;
+        bytes: number;
+        timestamp: Date;
+    }): Promise<void> {
+        try {
+            // Find device by IP
+            const device = await storage.getDeviceByIp(deviceIp);
+            if (!device) return;
+
+            // If device is in learning mode, add flow to learning data
+            if (isDeviceLearning(device.id)) {
+                addFlowToLearning(device.id, flow);
+                return;
+            }
+
+            // If device is approved, check for anomalies
+            if (device.status === "approved") {
+                const { isAnomaly, reasons } = await checkFlowForAnomaly(device.id, flow);
+
+                if (isAnomaly) {
+                    // Rate limit alerts (max 1 per device per 5 minutes)
+                    const alertKey = `${device.id}:${flow.destIp}`;
+                    const lastAlert = this.lastAnomalyAlerts.get(alertKey);
+                    const now = Date.now();
+
+                    if (!lastAlert || (now - lastAlert) > 5 * 60 * 1000) {
+                        this.lastAnomalyAlerts.set(alertKey, now);
+
+                        await createAnomalyAlert(
+                            device,
+                            "behavior_anomaly",
+                            reasons.join("; "),
+                            "medium"
+                        );
+                    }
+                }
+            }
+        } catch {
+            // Silently ignore errors
+        }
+    }
+
+    // Track last anomaly alert time per device/destination to rate limit
+    private lastAnomalyAlerts = new Map<string, number>();
 
     /**
      * Get traffic data for a specific device (by IP)

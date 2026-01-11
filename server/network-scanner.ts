@@ -266,20 +266,85 @@ export async function scanNetwork(iface?: string, deep: boolean = false): Promis
  * Attempt to resolve hostname for an IP address
  */
 export async function resolveHostname(ip: string): Promise<string | undefined> {
+    // Try multiple methods to get the real device name
+
+    // 1. Try reverse DNS first (fastest)
     try {
-        const { stdout } = await execAsync(`getent hosts ${ip} 2>/dev/null || host ${ip} 2>/dev/null`);
+        const { stdout } = await execAsync(`getent hosts ${ip} 2>/dev/null`);
         const parts = stdout.trim().split(/\s+/);
         if (parts.length >= 2) {
-            // getent format: IP hostname
-            // host format: IP.in-addr.arpa domain name pointer hostname.
-            const hostname = parts[parts.length - 1].replace(/\.$/, "");
-            if (hostname && !hostname.includes("in-addr.arpa")) {
+            const hostname = parts[1].replace(/\.$/, "");
+            if (hostname && !hostname.includes("in-addr.arpa") && hostname !== ip) {
                 return hostname;
             }
         }
-    } catch {
-        // Hostname resolution failed, that's OK
-    }
+    } catch { }
+
+    // 2. Try mDNS/Avahi (for Apple/Linux devices with .local names)
+    try {
+        const { stdout } = await execAsync(`timeout 2 avahi-resolve -a ${ip} 2>/dev/null`);
+        const parts = stdout.trim().split(/\s+/);
+        if (parts.length >= 2) {
+            const hostname = parts[1].replace(/\.local\.?$/, "");
+            if (hostname && hostname !== ip) {
+                return hostname;
+            }
+        }
+    } catch { }
+
+    // 3. Try NetBIOS name lookup (for Windows devices)
+    try {
+        const { stdout } = await execAsync(`timeout 2 nmblookup -A ${ip} 2>/dev/null | grep '<00>' | head -1`);
+        const match = stdout.match(/^\s*(\S+)\s+<00>/);
+        if (match && match[1]) {
+            return match[1];
+        }
+    } catch { }
+
+    // 4. Try DHCP leases (Pi-hole or dnsmasq)
+    try {
+        // Check Pi-hole leases
+        const { stdout: piholeLeases } = await execAsync(`grep "${ip}" /etc/pihole/dhcp.leases 2>/dev/null || true`);
+        if (piholeLeases.trim()) {
+            const parts = piholeLeases.trim().split(/\s+/);
+            if (parts.length >= 4 && parts[3] !== "*") {
+                return parts[3];
+            }
+        }
+    } catch { }
+
+    try {
+        // Check dnsmasq leases
+        const { stdout: dnsmasqLeases } = await execAsync(`grep "${ip}" /var/lib/misc/dnsmasq.leases 2>/dev/null || true`);
+        if (dnsmasqLeases.trim()) {
+            const parts = dnsmasqLeases.trim().split(/\s+/);
+            if (parts.length >= 4 && parts[3] !== "*") {
+                return parts[3];
+            }
+        }
+    } catch { }
+
+    // 5. Try ARP table hostname (some routers provide this)
+    try {
+        const { stdout } = await execAsync(`arp -a ${ip} 2>/dev/null`);
+        const match = stdout.match(/^(\S+)\s+\(/);
+        if (match && match[1] && match[1] !== "?" && match[1] !== ip) {
+            return match[1];
+        }
+    } catch { }
+
+    // 6. Fallback to 'host' command
+    try {
+        const { stdout } = await execAsync(`timeout 2 host ${ip} 2>/dev/null`);
+        const match = stdout.match(/pointer\s+(\S+)/);
+        if (match && match[1]) {
+            const hostname = match[1].replace(/\.$/, "");
+            if (!hostname.includes("in-addr.arpa")) {
+                return hostname;
+            }
+        }
+    } catch { }
+
     return undefined;
 }
 

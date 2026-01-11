@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import { loginSchema, insertDeviceGroupSchema } from "@shared/schema";
 import { z } from "zod";
 import { scanNetwork, getNetworkInterfaces, generateDeviceName, discoverDeviceDetails, getMacVendor, classifyDeviceType, scanPorts } from "./network-scanner";
+import { updateDeviceAccess, getAccessControlStatus, saveAccessControlRules } from "./device-access-control";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -193,6 +194,17 @@ export async function registerRoutes(
     const limit = parseInt(req.query.limit as string) || 50;
     const flows = await storage.getFlowEventsByIp(req.params.ip, limit);
     res.json(flows);
+  });
+
+  // ==================== ACCESS CONTROL ====================
+  app.get("/api/access-control/status", async (req, res) => {
+    const status = await getAccessControlStatus();
+    res.json(status);
+  });
+
+  app.post("/api/access-control/save", async (req, res) => {
+    const success = await saveAccessControlRules();
+    res.json({ success });
   });
 
   // Packet capture / live monitoring
@@ -616,6 +628,9 @@ export async function registerRoutes(
       details: `Device ${device.name} was approved and baseline learning started`,
     });
 
+    // Update access control to allow this device
+    await updateDeviceAccess(device.macAddress, "approved");
+
     res.json(device);
   });
 
@@ -637,6 +652,9 @@ export async function registerRoutes(
       deviceName: device.name,
       details: `Device ${device.name} was rejected and blocked from the network`,
     });
+
+    // Update access control to block this device
+    await updateDeviceAccess(device.macAddress, "blocked");
 
     res.json(device);
   });
@@ -660,6 +678,9 @@ export async function registerRoutes(
       details: `Device ${device.name} was manually blocked from the network`,
     });
 
+    // Update access control to block this device
+    await updateDeviceAccess(device.macAddress, "blocked");
+
     res.json(device);
   });
 
@@ -681,6 +702,9 @@ export async function registerRoutes(
       deviceName: device.name,
       details: `Device ${device.name} was unblocked and re-approved`,
     });
+
+    // Update access control to allow this device
+    await updateDeviceAccess(device.macAddress, "approved");
 
     res.json(device);
   });
@@ -704,6 +728,9 @@ export async function registerRoutes(
       deviceName: device.name,
       details: `Device ${device.name} was removed from the network`,
     });
+
+    // Remove from access control (block the MAC)
+    await updateDeviceAccess(device.macAddress, "blocked");
 
     const deleted = await storage.deleteDevice(id);
     if (!deleted) {

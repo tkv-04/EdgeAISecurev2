@@ -179,6 +179,14 @@ export class DatabaseStorage implements IStorage {
     return device;
   }
 
+  async getDeviceByIp(ipAddress: string): Promise<Device | undefined> {
+    const [device] = await db
+      .select()
+      .from(devices)
+      .where(eq(devices.ipAddress, ipAddress));
+    return device;
+  }
+
   async updateDeviceName(id: number, name: string): Promise<Device | undefined> {
     const [device] = await db
       .update(devices)
@@ -279,7 +287,10 @@ export class DatabaseStorage implements IStorage {
     const durationMs =
       (userSettings?.learningDurationSeconds ?? 60) * 1000;
 
-    this.scheduleBaselineCompletion(monitoringDevice, durationMs);
+    // Start real baseline learning with flow collection
+    const { startBaselineLearning: startLearning } = await import("./baseline-service");
+    await startLearning(monitoringDevice, durationMs);
+
     return monitoringDevice;
   }
 

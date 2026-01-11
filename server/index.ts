@@ -63,6 +63,15 @@ app.use((req, res, next) => {
 (async () => {
   await registerRoutes(httpServer, app);
 
+  // Initialize device access control (iptables rules for approved devices only)
+  try {
+    const { initAccessControl } = await import("./device-access-control");
+    await initAccessControl();
+    console.log("[Server] Device access control initialized");
+  } catch (error) {
+    console.error("[Server] Failed to initialize access control:", error);
+  }
+
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";

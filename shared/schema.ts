@@ -95,6 +95,26 @@ export const flowEvents = pgTable("flow_events", {
   totalBytes: integer("total_bytes").notNull().default(0),
 });
 
+// Device baselines table (learned behavior profiles)
+export const deviceBaselines = pgTable("device_baselines", {
+  id: serial("id").primaryKey(),
+  deviceId: integer("device_id").notNull(),
+  // Traffic metrics
+  avgBytesPerSec: real("avg_bytes_per_sec").notNull().default(0),
+  maxBytesPerSec: real("max_bytes_per_sec").notNull().default(0),
+  avgConnectionsPerMin: real("avg_connections_per_min").notNull().default(0),
+  // Learned patterns (JSON arrays)
+  protocols: jsonb("protocols").notNull().default([]),           // ["TCP", "UDP", "HTTP"]
+  destinations: jsonb("destinations").notNull().default([]),     // ["8.8.8.8", "api.example.com"]
+  ports: jsonb("ports").notNull().default([]),                   // [80, 443, 1883]
+  activeHours: jsonb("active_hours").notNull().default({}),      // {"9": 10, "10": 15, ...}
+  // Learning metadata
+  learningStartedAt: timestamp("learning_started_at").notNull().defaultNow(),
+  learningCompletedAt: timestamp("learning_completed_at"),
+  flowsAnalyzed: integer("flows_analyzed").notNull().default(0),
+  isComplete: integer("is_complete").notNull().default(0),       // 0 = learning, 1 = complete
+});
+
 // Users table
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
@@ -181,6 +201,9 @@ export type InsertPacketEvent = z.infer<typeof insertPacketEventSchema>;
 export const insertFlowEventSchema = createInsertSchema(flowEvents).omit({ id: true });
 export type InsertFlowEvent = z.infer<typeof insertFlowEventSchema>;
 
+export const insertDeviceBaselineSchema = createInsertSchema(deviceBaselines).omit({ id: true });
+export type InsertDeviceBaseline = z.infer<typeof insertDeviceBaselineSchema>;
+
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true });
 export type InsertUser = z.infer<typeof insertUserSchema>;
 
@@ -197,6 +220,7 @@ export type LogEntry = typeof logs.$inferSelect;
 export type TrafficDataPoint = typeof trafficData.$inferSelect;
 export type PacketEvent = typeof packetEvents.$inferSelect;
 export type FlowEvent = typeof flowEvents.$inferSelect;
+export type DeviceBaseline = typeof deviceBaselines.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type Settings = typeof settings.$inferSelect;
 

@@ -1,0 +1,26 @@
+[Unit]
+Description=EdgeAISecure IoT Network Monitor
+After=network.target postgresql.service suricata.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/Documents/v2/EdgeAISecurev2
+ExecStart=/usr/bin/npm run dev
+Restart=always
+RestartSec=10
+Environment=NODE_ENV=production
+Environment=PORT=5000
+
+# Resource limits for Pi
+MemoryMax=512M
+CPUWeight=50
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=edgeaisecure
+
+[Install]
+WantedBy=multi-user.target
