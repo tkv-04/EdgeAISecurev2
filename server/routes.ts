@@ -458,7 +458,24 @@ export async function registerRoutes(
   // ==================== DEVICE ROUTES ====================
   app.get("/api/devices", async (req, res) => {
     const devices = await storage.getDevices();
-    res.json(devices);
+
+    // Enrich devices with AI confidence data
+    const { getModelSummary } = require("./ai-anomaly-detector");
+    const enrichedDevices = devices.map(device => {
+      try {
+        const aiSummary = getModelSummary(device.id);
+        return {
+          ...device,
+          aiConfidence: aiSummary.confidence || 0,
+          aiSamples: aiSummary.samples || 0,
+          hasAiModel: aiSummary.hasModel || false,
+        };
+      } catch {
+        return { ...device, aiConfidence: 0, aiSamples: 0, hasAiModel: false };
+      }
+    });
+
+    res.json(enrichedDevices);
   });
 
   app.get("/api/devices/:id", async (req, res) => {
