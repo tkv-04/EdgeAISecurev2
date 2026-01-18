@@ -354,9 +354,19 @@ class SuricataReaderService extends EventEmitter {
 
             // If device is approved, check for anomalies
             if (device.status === "approved") {
-                const { isAnomaly, reasons } = await checkFlowForAnomaly(device.id, flow);
+                const result = await checkFlowForAnomaly(device.id, flow);
+                const { isAnomaly, reasons } = result;
+                const anomalyScore = (result as any).anomalyScore || 0.5;
 
                 if (isAnomaly) {
+                    // Check for auto-quarantine (critical anomalies)
+                    try {
+                        const { evaluateForQuarantine } = await import("./auto-quarantine");
+                        await evaluateForQuarantine(device, anomalyScore, reasons.join("; "));
+                    } catch (err) {
+                        // Auto-quarantine not critical, continue
+                    }
+
                     // Rate limit alerts (max 1 per device per 5 minutes)
                     const alertKey = `${device.id}:${flow.destIp}`;
                     const lastAlert = this.lastAnomalyAlerts.get(alertKey);
@@ -369,7 +379,7 @@ class SuricataReaderService extends EventEmitter {
                             device,
                             "behavior_anomaly",
                             reasons.join("; "),
-                            "medium"
+                            anomalyScore
                         );
                     }
                 }

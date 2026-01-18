@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 import { SummaryCard } from "@/components/summary-card";
 import { StatusBadge } from "@/components/status-badge";
+import { AIConfidenceBadge } from "@/components/ai-confidence-badge";
+import { LearningProgressBadge } from "@/components/learning-progress-badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -241,7 +243,7 @@ export default function DashboardPage() {
                   <div className="space-y-2">
                     <h4 className="font-medium text-sm mb-3">Select devices to display</h4>
                     <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                      {approvedDevices.map((device) => (
+                      {approvedDevices.map((device: any) => (
                         <div key={device.id} className="flex items-center space-x-2">
                           <Checkbox
                             id={`device-${device.id}`}
@@ -254,6 +256,15 @@ export default function DashboardPage() {
                           >
                             {device.name}
                           </label>
+                          <AIConfidenceBadge
+                            confidence={device.aiConfidence || 0}
+                            samples={device.aiSamples || 0}
+                            hasModel={device.hasAiModel || false}
+                          />
+                          <LearningProgressBadge
+                            isLearning={device.isLearning || false}
+                            progress={device.learningProgress || 0}
+                          />
                         </div>
                       ))}
                     </div>

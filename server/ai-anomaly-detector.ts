@@ -495,3 +495,25 @@ export function clearModel(deviceId: number): void {
 export function getAllModelIds(): number[] {
     return Array.from(behaviorModels.keys());
 }
+
+/**
+ * Train model from historical flow data (alias for addFlowObservation)
+ * Used when training from stored flow events
+ */
+export function trainFromHistoricalFlows(
+    deviceId: number,
+    flow: {
+        bytes: number;
+        protocol: string;
+        destIp: string;
+        destPort: number;
+        timestamp: Date;
+    }
+): void {
+    addFlowObservation(deviceId, {
+        bytes: flow.bytes,
+        protocol: flow.protocol,
+        destIp: flow.destIp,
+        timestamp: flow.timestamp,
+    });
+}

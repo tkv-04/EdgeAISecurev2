@@ -23,6 +23,8 @@ import QuarantinePage from "@/pages/quarantine";
 import BlockedDevicesPage from "@/pages/blocked-devices";
 import LogsPage from "@/pages/logs";
 import SettingsPage from "@/pages/settings";
+import FlowHistoryPage from "@/pages/flow-history";
+import SuricataAlertsPage from "@/pages/suricata-alerts";
 import NotFound from "@/pages/not-found";
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
@@ -138,6 +140,16 @@ function Router() {
       <Route path="/settings">
         <AuthenticatedLayout>
           <ProtectedRoute component={SettingsPage} />
+        </AuthenticatedLayout>
+      </Route>
+      <Route path="/flow-history">
+        <AuthenticatedLayout>
+          <ProtectedRoute component={FlowHistoryPage} />
+        </AuthenticatedLayout>
+      </Route>
+      <Route path="/suricata-alerts">
+        <AuthenticatedLayout>
+          <ProtectedRoute component={SuricataAlertsPage} />
         </AuthenticatedLayout>
       </Route>
       <Route>

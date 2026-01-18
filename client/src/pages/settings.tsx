@@ -7,6 +7,7 @@ import {
   Sun,
   RefreshCw,
   Save,
+  Database,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -144,6 +145,14 @@ export default function SettingsPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => window.location.href = "/flow-history"}
+            className="gap-2"
+          >
+            <Database className="h-4 w-4" />
+            Flow History & AI Training
+          </Button>
           <Button
             variant="outline"
             onClick={handleReset}

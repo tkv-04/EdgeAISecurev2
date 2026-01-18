@@ -1,7 +1,9 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { loginSchema, insertDeviceGroupSchema } from "@shared/schema";
+import { db } from "./db";
+import { loginSchema, insertDeviceGroupSchema, flowEvents } from "@shared/schema";
+import { eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { scanNetwork, getNetworkInterfaces, generateDeviceName, discoverDeviceDetails, getMacVendor, classifyDeviceType, scanPorts } from "./network-scanner";
 import { updateDeviceAccess, getAccessControlStatus, saveAccessControlRules } from "./device-access-control";
@@ -314,6 +316,90 @@ export async function registerRoutes(
     res.json(result);
   });
 
+  // Train AI models from historical flow events
+  app.post("/api/ai/train-from-history", async (req, res) => {
+    try {
+      const { trainFromHistoricalFlows, getBehaviorModel, getModelSummary } = await import("./ai-anomaly-detector");
+      const devices = await storage.getDevices();
+
+      let trainedCount = 0;
+      const results: any[] = [];
+
+      for (const device of devices) {
+        if (device.status === "approved" || device.status === "monitoring") {
+          try {
+            // Get flow events for this device from database
+            const flows = await db.select()
+              .from(flowEvents)
+              .where(eq(flowEvents.srcIp, device.ipAddress))
+              .limit(1000);
+
+            if (flows.length > 0) {
+              // Train the model with historical flows
+              for (const flow of flows) {
+                trainFromHistoricalFlows(device.id, {
+                  bytes: flow.totalBytes || 0,
+                  protocol: flow.protocol || "unknown",
+                  destIp: flow.destIp || "",
+                  destPort: 0, // No destPort in flow_events table
+                  timestamp: flow.timestamp || new Date(),
+                });
+              }
+
+              const summary = getModelSummary(device.id);
+              results.push({
+                deviceId: device.id,
+                name: device.name,
+                flowsProcessed: flows.length,
+                hasModel: summary.hasModel,
+                confidence: summary.confidence,
+                samples: summary.samples,
+              });
+
+              if (summary.hasModel) trainedCount++;
+            }
+          } catch (err) {
+            console.log(`[AI] Failed to train for ${device.name}:`, err);
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        message: `Trained ${trainedCount} device models from historical data`,
+        results,
+      });
+    } catch (error) {
+      console.error("[AI] Train from history failed:", error);
+      res.status(500).json({ error: "Failed to train from history" });
+    }
+  });
+
+  // Retrain AI model for a device
+  app.post("/api/devices/:id/retrain", async (req, res) => {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: "Invalid device ID" });
+    }
+
+    const device = await storage.getDevice(id);
+    if (!device) {
+      return res.status(404).json({ error: "Device not found" });
+    }
+
+    // Start baseline learning with shorter duration for retraining
+    const baselineService = await import("./baseline-service");
+    const durationMs = 60 * 1000; // 1 minute for retraining
+
+    await baselineService.startBaselineLearning(device, durationMs);
+
+    res.json({
+      success: true,
+      message: `Retraining started for ${device.name}. Duration: ${durationMs / 1000}s`,
+      deviceId: device.id,
+    });
+  });
+
   // Block device (DHCP-level, no IP)
   app.post("/api/devices/:id/block", async (req, res) => {
     const id = parseInt(req.params.id);
@@ -459,23 +545,113 @@ export async function registerRoutes(
   app.get("/api/devices", async (req, res) => {
     const devices = await storage.getDevices();
 
-    // Enrich devices with AI confidence data
-    const { getModelSummary } = require("./ai-anomaly-detector");
+    // Enrich devices with AI confidence and learning progress data
+    const aiModule = await import("./ai-anomaly-detector");
+    const baselineModule = await import("./baseline-service");
+
     const enrichedDevices = devices.map(device => {
       try {
-        const aiSummary = getModelSummary(device.id);
+        const aiSummary = aiModule.getModelSummary(device.id);
+        const inMemoryLearning = baselineModule.isDeviceLearning(device.id);
+        // Device is learning if in-memory tracking OR status is monitoring/learning
+        const isLearning = inMemoryLearning || device.status === "monitoring" || device.status === "learning";
+        const learningProgress = inMemoryLearning
+          ? Math.round(baselineModule.getLearningProgress(device.id) * 100)
+          : (device.status === "monitoring" || device.status === "learning" ? 50 : 0); // Default 50% if in monitoring status
+
+        // Calculate online status based on lastSeen (online if seen within 5 minutes)
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+        const isOnline = device.lastSeen ? new Date(device.lastSeen) > fiveMinutesAgo : false;
+
         return {
           ...device,
           aiConfidence: aiSummary.confidence || 0,
           aiSamples: aiSummary.samples || 0,
           hasAiModel: aiSummary.hasModel || false,
+          isLearning,
+          learningProgress,
+          isOnline,
         };
       } catch {
-        return { ...device, aiConfidence: 0, aiSamples: 0, hasAiModel: false };
+        const isLearning = device.status === "monitoring" || device.status === "learning";
+        const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+        const isOnline = device.lastSeen ? new Date(device.lastSeen) > fiveMinutesAgo : false;
+        return { ...device, aiConfidence: 0, aiSamples: 0, hasAiModel: false, isLearning, learningProgress: isLearning ? 50 : 0, isOnline };
       }
     });
 
     res.json(enrichedDevices);
+  });
+
+  // Get flow statistics for historical analysis
+  app.get("/api/flows/stats", async (req, res) => {
+    try {
+      // Get total count
+      const countResult = await db.select({ count: sql<number>`count(*)` })
+        .from(flowEvents);
+      const totalFlows = countResult[0]?.count || 0;
+
+      // Get time range
+      const timeResult = await db.select({
+        oldest: sql<Date>`min(timestamp)`,
+        newest: sql<Date>`max(timestamp)`,
+      }).from(flowEvents);
+
+      res.json({
+        totalFlows,
+        oldestFlow: timeResult[0]?.oldest?.toISOString() || null,
+        newestFlow: timeResult[0]?.newest?.toISOString() || null,
+      });
+    } catch (error) {
+      console.error("[API] Failed to get flow stats:", error);
+      res.status(500).json({ error: "Failed to get flow statistics" });
+    }
+  });
+
+  // Get Suricata IDS alerts from fast.log
+  app.get("/api/suricata/alerts", async (req, res) => {
+    try {
+      const { execSync } = await import("child_process");
+      const logPath = "/var/log/suricata/fast.log";
+
+      let content = "";
+      try {
+        content = execSync(`tail -100 ${logPath}`, { encoding: "utf-8" });
+      } catch {
+        return res.json([]);
+      }
+
+      const lines = content.trim().split("\n").filter(Boolean);
+      const alerts: any[] = [];
+
+      // Parse Suricata fast.log format:
+      // 01/18/2026-11:11:26.411573  [**] [1:2033078:4] ET INFO ... [**] [Classification: ...] [Priority: 3] {UDP} 192.168.31.217:48817 -> 111.92.44.229:11520
+      const alertRegex = /^(\S+)\s+\[\*\*\]\s+\[(\d+:\d+:\d+)\]\s+(.+?)\s+\[\*\*\]\s+\[Classification:\s*([^\]]*)\]\s+\[Priority:\s*(\d+)\]\s+\{(\w+)\}\s+(\d+\.\d+\.\d+\.\d+):(\d+)\s*->\s*(\d+\.\d+\.\d+\.\d+):(\d+)/;
+
+      for (const line of lines.slice(-100)) { // Last 100 alerts
+        const match = line.match(alertRegex);
+        if (match) {
+          alerts.push({
+            timestamp: match[1],
+            sid: match[2],
+            signature: match[3],
+            classification: match[4],
+            priority: parseInt(match[5]),
+            protocol: match[6],
+            srcIp: match[7],
+            srcPort: parseInt(match[8]),
+            destIp: match[9],
+            destPort: parseInt(match[10]),
+          });
+        }
+      }
+
+      // Return newest first
+      res.json(alerts.reverse());
+    } catch (error) {
+      console.error("[API] Failed to get Suricata alerts:", error);
+      res.status(500).json({ error: "Failed to get Suricata alerts" });
+    }
   });
 
   app.get("/api/devices/:id", async (req, res) => {

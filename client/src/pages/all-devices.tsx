@@ -13,6 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { StatusBadge } from "@/components/status-badge";
+import { OnlineStatusBadge } from "@/components/online-status-badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
@@ -229,7 +230,12 @@ export default function AllDevicesPage() {
                 <TableBody>
                   {filteredDevices.map((device) => (
                     <TableRow key={device.id}>
-                      <TableCell className="font-medium">{device.name}</TableCell>
+                      <TableCell className="font-medium">
+                        <div className="flex items-center gap-2">
+                          <OnlineStatusBadge isOnline={(device as any).isOnline} lastSeen={device.lastSeen} />
+                          {device.name}
+                        </div>
+                      </TableCell>
                       <TableCell className="font-mono text-sm">{device.ipAddress}</TableCell>
                       <TableCell className="font-mono text-sm">{device.macAddress}</TableCell>
                       <TableCell>

@@ -72,6 +72,14 @@ app.use((req, res, next) => {
     console.error("[Server] Failed to initialize access control:", error);
   }
 
+  // Restore active learning sessions from database
+  try {
+    const { restoreActiveLearning } = await import("./baseline-service");
+    await restoreActiveLearning();
+  } catch (error) {
+    console.error("[Server] Failed to restore learning sessions:", error);
+  }
+
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";

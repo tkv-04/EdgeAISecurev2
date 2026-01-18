@@ -1,0 +1,15 @@
+{
+  "deviceId": 75,
+  "exportedAt": "2026-01-11T17:32:13.684Z",
+  "models": {
+    "statistical": "not_trained",
+    "isolationForest": "not_trained"
+  },
+  "data": {
+    "statistical": null,
+    "isolationForest": {
+      "trained": false,
+      "numTrees": 0
+    }
+  }
+}

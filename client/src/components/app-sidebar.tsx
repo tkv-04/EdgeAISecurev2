@@ -61,6 +61,11 @@ const mainNavItems = [
     icon: AlertTriangle,
   },
   {
+    title: "Suricata IDS",
+    url: "/suricata-alerts",
+    icon: Shield,
+  },
+  {
     title: "Quarantine",
     url: "/quarantine",
     icon: Lock,

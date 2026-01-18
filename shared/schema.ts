@@ -111,8 +111,11 @@ export const deviceBaselines = pgTable("device_baselines", {
   // Learning metadata
   learningStartedAt: timestamp("learning_started_at").notNull().defaultNow(),
   learningCompletedAt: timestamp("learning_completed_at"),
+  learningDurationMs: integer("learning_duration_ms").notNull().default(3600000), // 1 hour default
   flowsAnalyzed: integer("flows_analyzed").notNull().default(0),
   isComplete: integer("is_complete").notNull().default(0),       // 0 = learning, 1 = complete
+  // AI/ML model storage
+  aiModels: jsonb("ai_models").default(null),                    // Serialized AI models (statistical, IF, LSTM)
 });
 
 // Users table

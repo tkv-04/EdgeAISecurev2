@@ -36,6 +36,7 @@ export async function startBaselineLearning(device: Device, durationMs: number =
             .set({
                 learningStartedAt: new Date(),
                 learningCompletedAt: null,
+                learningDurationMs: durationMs,  // Save duration for persistence
                 isComplete: 0,
                 flowsAnalyzed: 0,
                 protocols: [],
@@ -52,6 +53,7 @@ export async function startBaselineLearning(device: Device, durationMs: number =
         await db.insert(deviceBaselines).values({
             deviceId: device.id,
             learningStartedAt: new Date(),
+            learningDurationMs: durationMs,  // Save duration for persistence
             isComplete: 0,
         });
     }
@@ -116,14 +118,73 @@ export function isDeviceLearning(deviceId: number): boolean {
 }
 
 /**
- * Get learning progress for a device (0-100%)
+ * Get learning progress for a device (0-1 range)
  */
 export function getLearningProgress(deviceId: number): number {
     const learning = learningDevices.get(deviceId);
-    if (!learning) return 100;
+    if (!learning) return 1; // Return 1 (100%) if not in memory
 
     const elapsed = Date.now() - learning.startedAt.getTime();
-    return Math.min(100, Math.round((elapsed / learning.durationMs) * 100));
+    return Math.min(1, elapsed / learning.durationMs);
+}
+
+/**
+ * Get learning progress from database (for devices with status monitoring/learning)
+ */
+export async function getLearningProgressFromDb(deviceId: number): Promise<number> {
+    const baseline = await getDeviceBaseline(deviceId);
+    if (!baseline || baseline.isComplete === 1) return 1;
+
+    const startedAt = new Date(baseline.learningStartedAt).getTime();
+    const durationMs = (baseline as any).learningDurationMs || 3600000;
+    const elapsed = Date.now() - startedAt;
+
+    return Math.min(1, elapsed / durationMs);
+}
+
+/**
+ * Restore active learning sessions from database on server startup
+ */
+export async function restoreActiveLearning(): Promise<void> {
+    console.log("[BaselineService] Restoring active learning sessions...");
+
+    // Find all incomplete baselines
+    const incompleteBaselines = await db.select()
+        .from(deviceBaselines)
+        .where(eq(deviceBaselines.isComplete, 0));
+
+    let restored = 0;
+    let completed = 0;
+
+    for (const baseline of incompleteBaselines) {
+        const startedAt = new Date(baseline.learningStartedAt);
+        const durationMs = (baseline as any).learningDurationMs || 3600000;
+        const elapsed = Date.now() - startedAt.getTime();
+        const remaining = durationMs - elapsed;
+
+        if (remaining > 0) {
+            // Learning still in progress - restore the session
+            learningDevices.set(baseline.deviceId, {
+                startedAt,
+                durationMs,
+                flows: [], // Flows will be collected from now
+            });
+
+            // Schedule completion
+            setTimeout(async () => {
+                await completeBaselineLearning(baseline.deviceId);
+            }, remaining);
+
+            restored++;
+            console.log(`[BaselineService] Restored learning for device ${baseline.deviceId}, ${Math.round(remaining / 60000)}min remaining`);
+        } else {
+            // Learning should have completed - complete it now
+            await completeBaselineLearning(baseline.deviceId);
+            completed++;
+        }
+    }
+
+    console.log(`[BaselineService] Restored ${restored} learning sessions, completed ${completed} expired sessions`);
 }
 
 /**
@@ -197,6 +258,14 @@ async function completeBaselineLearning(deviceId: number): Promise<void> {
         }
     } catch (err) {
         console.log(`[BaselineService] LSTM training skipped:`, err);
+    }
+
+    // Save AI models to database for persistence
+    try {
+        await saveAIModelsToDatabase(deviceId);
+        console.log(`[BaselineService] AI models saved to database`);
+    } catch (err) {
+        console.log(`[BaselineService] Failed to save AI models:`, err);
     }
 
     // Clean up
@@ -393,16 +462,27 @@ export async function checkTrafficRateAnomaly(
 }
 
 /**
+ * Get alert severity from AI anomaly score
+ */
+export function getSeverityFromAIScore(score: number): "low" | "medium" | "high" | "critical" {
+    if (score >= 0.8) return "critical";
+    if (score >= 0.65) return "high";
+    if (score >= 0.5) return "medium";
+    return "low";
+}
+
+/**
  * Create an anomaly alert for a device
  */
 export async function createAnomalyAlert(
     device: Device,
     anomalyType: string,
     description: string,
-    severity: "low" | "medium" | "high" | "critical" = "medium"
+    aiScore?: number
 ): Promise<void> {
-    // Calculate anomaly score based on severity
-    const severityScores = { low: 0.3, medium: 0.5, high: 0.7, critical: 0.9 };
+    // Determine severity from AI score if provided, otherwise medium
+    const severity = aiScore !== undefined ? getSeverityFromAIScore(aiScore) : "medium";
+    const anomalyScore = aiScore !== undefined ? aiScore : 0.5;
 
     await storage.createAlert({
         deviceId: device.id,
@@ -411,11 +491,11 @@ export async function createAnomalyAlert(
         anomalyType,
         severity,
         status: "open",
-        anomalyScore: severityScores[severity],
+        anomalyScore,
         description,
     });
 
-    console.log(`[BaselineService] Alert created for ${device.name}: ${anomalyType}`);
+    console.log(`[BaselineService] Alert created for ${device.name}: ${anomalyType} (severity: ${severity}, score: ${anomalyScore.toFixed(2)})`);
 }
 
 /**
@@ -452,3 +532,97 @@ export function getAllLearningStatus(): Array<{
 
     return result;
 }
+
+/**
+ * Save AI models to database for persistence across server restarts
+ */
+async function saveAIModelsToDatabase(deviceId: number): Promise<void> {
+    const { exportModel } = await import("./ai-anomaly-detector");
+    const { getForestSummary } = await import("./ml/isolation-forest");
+
+    const aiModels: any = {};
+
+    // Export statistical model
+    try {
+        aiModels.statistical = exportModel(deviceId);
+    } catch { }
+
+    // Export Isolation Forest summary (trees are too large to store)
+    try {
+        const ifSummary = getForestSummary(deviceId);
+        aiModels.isolationForest = { trained: ifSummary.trained, numTrees: ifSummary.numTrees };
+    } catch { }
+
+    // Update database with serialized models
+    await db.update(deviceBaselines)
+        .set({ aiModels })
+        .where(eq(deviceBaselines.deviceId, deviceId));
+
+    // Also save to file (in addition to database - doesn't break persistence)
+    await saveModelsToFile(deviceId, aiModels);
+}
+
+/**
+ * Save models to files in models/ folder
+ */
+async function saveModelsToFile(deviceId: number, aiModels: any): Promise<void> {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+
+    const modelsDir = path.join(process.cwd(), "models");
+
+    // Ensure models directory exists
+    try {
+        await fs.mkdir(modelsDir, { recursive: true });
+    } catch { }
+
+    // Save statistical model as JSON
+    if (aiModels.statistical) {
+        const filename = path.join(modelsDir, `device_${deviceId}_statistical.json`);
+        await fs.writeFile(filename, JSON.stringify(aiModels.statistical, null, 2));
+        console.log(`[BaselineService] Saved statistical model to ${filename}`);
+    }
+
+    // Save combined model info
+    const combinedFilename = path.join(modelsDir, `device_${deviceId}_model.json`);
+    const modelInfo = {
+        deviceId,
+        exportedAt: new Date().toISOString(),
+        models: {
+            statistical: aiModels.statistical ? "included" : "not_trained",
+            isolationForest: aiModels.isolationForest?.trained ? "trained" : "not_trained",
+        },
+        data: aiModels,
+    };
+    await fs.writeFile(combinedFilename, JSON.stringify(modelInfo, null, 2));
+    console.log(`[BaselineService] Saved model info to ${combinedFilename}`);
+}
+
+/**
+ * Load AI models from database on server startup
+ */
+export async function loadAIModelsFromDatabase(): Promise<void> {
+    console.log("[BaselineService] Loading AI models from database...");
+
+    const baselines = await db.select().from(deviceBaselines).where(eq(deviceBaselines.isComplete, 1));
+    let loadedCount = 0;
+
+    for (const baseline of baselines) {
+        if (baseline.aiModels) {
+            try {
+                const { importModel } = require("./ai-anomaly-detector");
+                const models = baseline.aiModels as any;
+
+                if (models.statistical) {
+                    importModel(baseline.deviceId, models.statistical);
+                    loadedCount++;
+                }
+            } catch (err) {
+                console.log(`[BaselineService] Failed to load model for device ${baseline.deviceId}:`, err);
+            }
+        }
+    }
+
+    console.log(`[BaselineService] Loaded ${loadedCount} AI models from database`);
+}
+
