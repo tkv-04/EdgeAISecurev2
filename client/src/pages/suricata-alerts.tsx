@@ -31,15 +31,22 @@ import {
 
 interface SuricataAlert {
   timestamp: string;
-  sid: number;
-  signature: string;
-  classification: string;
-  priority: number;
-  protocol: string;
+  eventType: string;
   srcIp: string;
   srcPort: number;
   destIp: string;
   destPort: number;
+  protocol: string;
+  appProto?: string;
+  alert?: {
+    action: string;
+    gid: number;
+    signatureId: number;
+    rev: number;
+    signature: string;
+    category: string;
+    severity: number;
+  };
 }
 
 export default function SuricataAlertsPage() {
@@ -48,6 +55,13 @@ export default function SuricataAlertsPage() {
 
   const { data: alerts = [], isLoading, refetch } = useQuery<SuricataAlert[]>({
     queryKey: ["/api/suricata/alerts", refreshKey],
+    queryFn: async () => {
+      const response = await fetch("/api/suricata/alerts");
+      if (!response.ok) {
+        throw new Error("Failed to fetch Suricata alerts");
+      }
+      return response.json();
+    },
     refetchInterval: 10000, // Auto-refresh every 10 seconds
   });
 
@@ -58,14 +72,14 @@ export default function SuricataAlertsPage() {
 
   const filteredAlerts = alerts.filter((alert) => {
     if (filter === "all") return true;
-    if (filter === "high") return alert.priority === 1;
-    if (filter === "medium") return alert.priority === 2;
-    if (filter === "low") return alert.priority >= 3;
+    if (filter === "high") return alert.alert?.severity === 1;
+    if (filter === "medium") return alert.alert?.severity === 2;
+    if (filter === "low") return (alert.alert?.severity ?? 3) >= 3;
     return true;
   });
 
-  const getPriorityBadge = (priority: number) => {
-    switch (priority) {
+  const getPriorityBadge = (severity: number | undefined) => {
+    switch (severity) {
       case 1:
         return (
           <Badge variant="destructive" className="gap-1">
@@ -102,18 +116,19 @@ export default function SuricataAlertsPage() {
 
   const formatTimestamp = (ts: string) => {
     if (!ts) return "N/A";
-    // Format: 01/18/2026-11:11:26.411573
-    const parts = ts.split("-");
-    if (parts.length >= 2) {
-      return `${parts[0]} ${parts[1].split(".")[0]}`;
+    try {
+      // API returns ISO format like "2026-01-20T18:38:21.762Z"
+      const date = new Date(ts);
+      return date.toLocaleString();
+    } catch {
+      return ts;
     }
-    return ts;
   };
 
-  // Count alerts by priority
-  const highCount = alerts.filter((a) => a.priority === 1).length;
-  const mediumCount = alerts.filter((a) => a.priority === 2).length;
-  const lowCount = alerts.filter((a) => a.priority >= 3).length;
+  // Count alerts by priority (using severity from alert object)
+  const highCount = alerts.filter((a) => a.alert?.severity === 1).length;
+  const mediumCount = alerts.filter((a) => a.alert?.severity === 2).length;
+  const lowCount = alerts.filter((a) => (a.alert?.severity ?? 3) >= 3).length;
 
   return (
     <div className="p-6 space-y-6">
@@ -248,14 +263,14 @@ export default function SuricataAlertsPage() {
                       <TableCell className="font-mono text-xs whitespace-nowrap">
                         {formatTimestamp(alert.timestamp)}
                       </TableCell>
-                      <TableCell>{getPriorityBadge(alert.priority)}</TableCell>
+                      <TableCell>{getPriorityBadge(alert.alert?.severity)}</TableCell>
                       <TableCell className="max-w-md">
                         <div className="space-y-1">
-                          <p className="font-medium text-sm truncate" title={alert.signature}>
-                            {alert.signature}
+                          <p className="font-medium text-sm truncate" title={alert.alert?.signature ?? "Unknown"}>
+                            {alert.alert?.signature ?? "Unknown signature"}
                           </p>
-                          <p className={`text-xs ${getClassificationColor(alert.classification)}`}>
-                            {alert.classification}
+                          <p className={`text-xs ${getClassificationColor(alert.alert?.category ?? "")}`}>
+                            {alert.alert?.category ?? "Unknown"}
                           </p>
                         </div>
                       </TableCell>
