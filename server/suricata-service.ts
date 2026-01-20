@@ -187,13 +187,34 @@ class SuricataReaderService extends EventEmitter {
             appProto: event.app_proto,
         };
 
-        // Store in history
+        // Store in history (in-memory)
         this.alertHistory.push(alert);
         if (this.alertHistory.length > this.maxAlerts) {
             this.alertHistory.shift();
         }
 
         this.stats.alertsTotal++;
+
+        // Persist to database for historical analysis
+        if (alert.alert) {
+            storage.addSuricataAlert({
+                timestamp: alert.timestamp,
+                eventType: alert.eventType,
+                srcIp: alert.srcIp,
+                srcPort: alert.srcPort,
+                destIp: alert.destIp,
+                destPort: alert.destPort,
+                protocol: alert.protocol,
+                appProto: alert.appProto,
+                signatureId: alert.alert.signatureId,
+                signature: alert.alert.signature,
+                category: alert.alert.category,
+                severity: alert.alert.severity,
+                action: alert.alert.action,
+            }).catch(err => {
+                console.error('[Suricata] Failed to persist alert:', err);
+            });
+        }
 
         // Emit event
         this.emit("alert", alert);

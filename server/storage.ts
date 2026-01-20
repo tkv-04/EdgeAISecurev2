@@ -11,6 +11,7 @@ import {
   flowEvents,
   users,
   settings,
+  suricataAlerts,
   type Device,
   type DeviceGroup,
   type Alert,
@@ -21,6 +22,7 @@ import {
   type FlowEvent,
   type User,
   type Settings,
+  type SuricataAlertRecord,
   type InsertDevice,
   type InsertDeviceGroup,
   type InsertAlert,
@@ -31,6 +33,7 @@ import {
   type InsertFlowEvent,
   type InsertUser,
   type InsertSettings,
+  type InsertSuricataAlert,
   type DeviceStatus,
   type DashboardStats,
   type AnomalyType,
@@ -93,6 +96,11 @@ export interface IStorage {
   // Settings
   getSettings(userId: number): Promise<Settings | undefined>;
   updateSettings(userId: number, updates: Partial<InsertSettings>): Promise<Settings | undefined>;
+
+  // Suricata IDS Alerts
+  addSuricataAlert(alert: InsertSuricataAlert): Promise<SuricataAlertRecord>;
+  getSuricataAlerts(limit?: number): Promise<SuricataAlertRecord[]>;
+  getSuricataAlertsForExport(): Promise<SuricataAlertRecord[]>;
 
   // Stats
   getDashboardStats(): Promise<DashboardStats>;
@@ -470,6 +478,26 @@ export class DatabaseStorage implements IStorage {
         .returning();
       return newSettings;
     }
+  }
+
+  // Suricata IDS Alerts methods
+  async addSuricataAlert(alert: InsertSuricataAlert): Promise<SuricataAlertRecord> {
+    const [newAlert] = await db.insert(suricataAlerts).values(alert).returning();
+    return newAlert;
+  }
+
+  async getSuricataAlerts(limit: number = 100): Promise<SuricataAlertRecord[]> {
+    return db.select()
+      .from(suricataAlerts)
+      .orderBy(desc(suricataAlerts.timestamp))
+      .limit(limit);
+  }
+
+  async getSuricataAlertsForExport(): Promise<SuricataAlertRecord[]> {
+    // Get all alerts for CSV export (no limit)
+    return db.select()
+      .from(suricataAlerts)
+      .orderBy(desc(suricataAlerts.timestamp));
   }
 
   // Stats

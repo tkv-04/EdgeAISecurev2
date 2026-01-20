@@ -118,6 +118,25 @@ export const deviceBaselines = pgTable("device_baselines", {
   aiModels: jsonb("ai_models").default(null),                    // Serialized AI models (statistical, IF, LSTM)
 });
 
+// Suricata IDS Alerts table (persisted for historical analysis)
+export const suricataAlerts = pgTable("suricata_alerts", {
+  id: serial("id").primaryKey(),
+  timestamp: timestamp("timestamp").notNull().defaultNow(),
+  eventType: text("event_type").notNull().default("alert"),
+  srcIp: text("src_ip").notNull(),
+  srcPort: integer("src_port"),
+  destIp: text("dest_ip").notNull(),
+  destPort: integer("dest_port"),
+  protocol: text("protocol").notNull(),
+  appProto: text("app_proto"),
+  // Alert details
+  signatureId: integer("signature_id").notNull(),
+  signature: text("signature").notNull(),
+  category: text("category").notNull(),
+  severity: integer("severity").notNull(),
+  action: text("action").default("allowed"),
+});
+
 // Users table
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
@@ -213,6 +232,9 @@ export type InsertUser = z.infer<typeof insertUserSchema>;
 export const insertSettingsSchema = createInsertSchema(settings).omit({ id: true });
 export type InsertSettings = z.infer<typeof insertSettingsSchema>;
 
+export const insertSuricataAlertSchema = createInsertSchema(suricataAlerts).omit({ id: true });
+export type InsertSuricataAlert = z.infer<typeof insertSuricataAlertSchema>;
+
 // ==================== SELECT TYPES ====================
 
 export type Device = typeof devices.$inferSelect;
@@ -226,6 +248,7 @@ export type FlowEvent = typeof flowEvents.$inferSelect;
 export type DeviceBaseline = typeof deviceBaselines.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type Settings = typeof settings.$inferSelect;
+export type SuricataAlertRecord = typeof suricataAlerts.$inferSelect;
 
 // ==================== VALIDATION SCHEMAS ====================
 

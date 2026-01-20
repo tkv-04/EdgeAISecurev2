@@ -169,6 +169,46 @@ export async function registerRoutes(
     res.json({ success: true });
   });
 
+  // Export Suricata alerts as CSV
+  app.get("/api/suricata/alerts/export", async (req, res) => {
+    try {
+      const alerts = await storage.getSuricataAlertsForExport();
+
+      // Build CSV content
+      const headers = [
+        "ID", "Timestamp", "Event Type", "Source IP", "Source Port",
+        "Destination IP", "Destination Port", "Protocol", "App Protocol",
+        "Signature ID", "Signature", "Category", "Severity", "Action"
+      ];
+
+      const rows = alerts.map(alert => [
+        alert.id,
+        alert.timestamp ? new Date(alert.timestamp).toISOString() : "",
+        alert.eventType,
+        alert.srcIp,
+        alert.srcPort || "",
+        alert.destIp,
+        alert.destPort || "",
+        alert.protocol,
+        alert.appProto || "",
+        alert.signatureId,
+        `"${(alert.signature || "").replace(/"/g, '""')}"`,
+        `"${(alert.category || "").replace(/"/g, '""')}"`,
+        alert.severity,
+        alert.action || ""
+      ]);
+
+      const csv = [headers.join(","), ...rows.map(row => row.join(","))].join("\n");
+
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", `attachment; filename=suricata_alerts_${new Date().toISOString().split('T')[0]}.csv`);
+      res.send(csv);
+    } catch (error) {
+      console.error("Error exporting Suricata alerts:", error);
+      res.status(500).json({ error: "Failed to export alerts" });
+    }
+  });
+
   // Suricata device traffic (24/7 monitoring)
   app.get("/api/suricata/traffic", async (req, res) => {
     const { suricataService } = await import("./suricata-service");
