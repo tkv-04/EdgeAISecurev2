@@ -3,6 +3,7 @@ import { EventEmitter } from "events";
 import { storage } from "./storage";
 import { notificationService } from "./notification-service";
 import { isDeviceLearning, addFlowToLearning, checkFlowForAnomaly, createAnomalyAlert } from "./baseline-service";
+import { analyzeConnection, getProtocolName, isSuspiciousPort } from "./protocol-detector";
 
 // ==================== Types ====================
 
@@ -249,18 +250,24 @@ class SuricataReaderService extends EventEmitter {
         // Use 'app_proto' for application layer (http, dns, tls) as enhancement
         const transportProto = event.proto || "unknown";  // TCP, UDP, ICMP, etc.
         const appProto = event.app_proto;  // http, dns, tls, quic, etc.
+        const destPort = event.dest_port || 0;
 
-        // Prefer app_proto if available and not 'failed', otherwise use transport proto
-        let protocol = transportProto.toLowerCase();
+        // Determine the best protocol name to display
+        let protocol: string;
         if (appProto && appProto !== "failed") {
-            protocol = appProto.toLowerCase();  // Use more specific app protocol
+            // Suricata detected the app protocol - use it
+            protocol = appProto.toLowerCase();
+        } else {
+            // Suricata didn't detect app protocol - use port-based detection
+            // getProtocolName returns "HTTPS" for 443, "HTTP" for 80, "TCP/1234" for unknown
+            protocol = getProtocolName(destPort, transportProto).toLowerCase();
         }
 
         if (protocol === "failed") return;
 
         const srcIp = event.src_ip;
         const destIp = event.dest_ip;
-        const destPort = event.dest_port || 0;
+        // destPort already declared above for protocol detection
         const bytesToServer = event.flow?.bytes_toserver || 0;
         const bytesToClient = event.flow?.bytes_toclient || 0;
         const timestamp = new Date(event.timestamp);
@@ -349,6 +356,22 @@ class SuricataReaderService extends EventEmitter {
             // If device is in learning mode, add flow to learning data
             if (isDeviceLearning(device.id)) {
                 addFlowToLearning(device.id, flow);
+
+                // Still check for suspicious ports even during learning
+                const portCheck = isSuspiciousPort(flow.destPort);
+                if (portCheck.suspicious && portCheck.severity === "high") {
+                    await storage.createAlert({
+                        deviceId: device.id,
+                        deviceName: device.name,
+                        timestamp: flow.timestamp,
+                        anomalyType: "suspicious_port",
+                        severity: "high",
+                        status: "open",
+                        anomalyScore: 85,
+                        description: `⚠️ Suspicious port detected: ${flow.destPort} - ${portCheck.reason}`,
+                    });
+                    console.log(`[Suricata] SUSPICIOUS PORT ALERT: ${device.name} connected to port ${flow.destPort} - ${portCheck.reason}`);
+                }
                 return;
             }
 

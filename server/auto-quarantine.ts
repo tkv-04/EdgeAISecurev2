@@ -121,6 +121,15 @@ async function quarantineDevice(
         "quarantined"
     );
 
+    // Also block via Pi-hole DNS for defense in depth
+    try {
+        const { blockDeviceViaDns } = await import("./pihole-service");
+        await blockDeviceViaDns(device.ipAddress, device.name);
+        console.log(`[AutoQuarantine] Also blocked ${device.name} via Pi-hole DNS`);
+    } catch (piholeError) {
+        console.log(`[AutoQuarantine] Pi-hole blocking skipped:`, piholeError);
+    }
+
     // Create alert
     const baselineService = await import("./baseline-service");
     await baselineService.createAnomalyAlert(

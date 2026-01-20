@@ -316,6 +316,86 @@ export async function registerRoutes(
     res.json(result);
   });
 
+  // ==================== PI-HOLE INTEGRATION ====================
+
+  // Get Pi-hole status and version
+  app.get("/api/pihole/status", async (req, res) => {
+    try {
+      const pihole = await import("./pihole-service");
+      const status = await pihole.checkPiholeStatus();
+      res.json(status);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to check Pi-hole status" });
+    }
+  });
+
+  // Get Pi-hole statistics
+  app.get("/api/pihole/stats", async (req, res) => {
+    try {
+      const pihole = await import("./pihole-service");
+      const stats = await pihole.getPiholeStats();
+      res.json(stats);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get Pi-hole stats" });
+    }
+  });
+
+  // Block a device via Pi-hole DNS
+  app.post("/api/pihole/block-device", async (req, res) => {
+    try {
+      const { ipAddress, deviceName } = req.body;
+      if (!ipAddress) {
+        return res.status(400).json({ error: "IP address required" });
+      }
+      const pihole = await import("./pihole-service");
+      const success = await pihole.blockDeviceViaDns(ipAddress, deviceName || "Unknown");
+      res.json({ success, message: success ? "Device blocked via DNS" : "Failed to block device" });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to block device via Pi-hole" });
+    }
+  });
+
+  // Unblock a device from Pi-hole DNS
+  app.post("/api/pihole/unblock-device", async (req, res) => {
+    try {
+      const { ipAddress } = req.body;
+      if (!ipAddress) {
+        return res.status(400).json({ error: "IP address required" });
+      }
+      const pihole = await import("./pihole-service");
+      const success = await pihole.unblockDeviceViaDns(ipAddress);
+      res.json({ success, message: success ? "Device unblocked from DNS" : "Failed to unblock device" });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to unblock device from Pi-hole" });
+    }
+  });
+
+  // Block a domain via Pi-hole
+  app.post("/api/pihole/block-domain", async (req, res) => {
+    try {
+      const { domain, reason } = req.body;
+      if (!domain) {
+        return res.status(400).json({ error: "Domain required" });
+      }
+      const pihole = await import("./pihole-service");
+      const success = await pihole.blockDomain(domain, reason);
+      res.json({ success, message: success ? `Blocked domain: ${domain}` : "Failed to block domain" });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to block domain via Pi-hole" });
+    }
+  });
+
+  // Get EdgeAISecure blocked devices list from Pi-hole
+  app.get("/api/pihole/blocked", async (req, res) => {
+    try {
+      const pihole = await import("./pihole-service");
+      const blocked = await pihole.getEdgeAISecureBlocked();
+      res.json({ blocked });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get blocked list" });
+    }
+  });
+
   // Train AI models from historical flow events
   app.post("/api/ai/train-from-history", async (req, res) => {
     try {
