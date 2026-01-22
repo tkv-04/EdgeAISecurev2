@@ -540,6 +540,9 @@ setInterval(async () => {
                 packetsPerSecond: fps,
                 bytesPerSecond: bps,
             });
+
+            // Also update device's trafficRate field for display on pages
+            await storage.updateDeviceMetrics(device.id, bps);
         }
     } catch (error) {
         // Silently ignore collection errors

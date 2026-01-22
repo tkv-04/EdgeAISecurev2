@@ -74,8 +74,10 @@ app.use((req, res, next) => {
 
   // Restore active learning sessions from database
   try {
-    const { restoreActiveLearning } = await import("./baseline-service");
+    const { restoreActiveLearning, loadAIModelsFromDatabase } = await import("./baseline-service");
     await restoreActiveLearning();
+    await loadAIModelsFromDatabase();
+    console.log("[Server] Learning sessions and AI models restored");
   } catch (error) {
     console.error("[Server] Failed to restore learning sessions:", error);
   }

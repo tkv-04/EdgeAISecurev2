@@ -953,10 +953,21 @@ export async function registerRoutes(
     if (isNaN(id)) {
       return res.status(400).json({ error: "Invalid device ID" });
     }
-    const device = await storage.startBaselineLearning(id);
+
+    const device = await storage.getDevice(id);
     if (!device) {
       return res.status(404).json({ error: "Device not found" });
     }
+
+    // Update device status to monitoring (learning phase)
+    await storage.updateDeviceStatus(id, "monitoring");
+
+    // Start actual baseline learning with AI training
+    const baselineService = await import("./baseline-service");
+    const settings = await storage.getSettings(1); // Get user settings
+    const durationMs = (settings?.learningDurationSeconds || 60) * 1000;
+
+    await baselineService.startBaselineLearning(device, durationMs);
 
     await storage.createLog({
       timestamp: new Date(),
@@ -964,7 +975,7 @@ export async function registerRoutes(
       performedBy: "admin",
       deviceId: device.id,
       deviceName: device.name,
-      details: `Device ${device.name} was approved and baseline learning started`,
+      details: `Device ${device.name} was approved and baseline learning started (${durationMs / 1000}s)`,
     });
 
     // Update access control to allow this device
@@ -1028,10 +1039,21 @@ export async function registerRoutes(
     if (isNaN(id)) {
       return res.status(400).json({ error: "Invalid device ID" });
     }
-    const device = await storage.startBaselineLearning(id);
+
+    const device = await storage.getDevice(id);
     if (!device) {
       return res.status(404).json({ error: "Device not found" });
     }
+
+    // Update device status to monitoring (learning phase)
+    await storage.updateDeviceStatus(id, "monitoring");
+
+    // Start baseline learning with AI training
+    const baselineService = await import("./baseline-service");
+    const settings = await storage.getSettings(1);
+    const durationMs = (settings?.learningDurationSeconds || 60) * 1000;
+
+    await baselineService.startBaselineLearning(device, durationMs);
 
     await storage.createLog({
       timestamp: new Date(),
@@ -1039,7 +1061,7 @@ export async function registerRoutes(
       performedBy: "admin",
       deviceId: device.id,
       deviceName: device.name,
-      details: `Device ${device.name} was unblocked and re-approved`,
+      details: `Device ${device.name} was unblocked and re-approved with baseline learning (${durationMs / 1000}s)`,
     });
 
     // Update access control to allow this device

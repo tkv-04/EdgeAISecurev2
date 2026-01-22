@@ -17,6 +17,14 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Device } from "@shared/schema";
 
+// Format bytes to human readable (B/s, KB/s, MB/s)
+function formatBytesPerSec(bytes: number): string {
+  if (!bytes || bytes === 0) return "0 B/s";
+  if (bytes < 1024) return `${bytes.toFixed(0)} B/s`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB/s`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB/s`;
+}
+
 export default function BaselineLearningPage() {
   const { toast } = useToast();
   const { data: devices, isLoading } = useQuery<Device[]>({
@@ -164,7 +172,7 @@ export default function BaselineLearningPage() {
                       <TableCell>
                         <div className="flex items-center gap-1">
                           <TrendingUp className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-sm">{device.avgTrafficRate} pps</span>
+                          <span className="text-sm">{formatBytesPerSec(device.avgTrafficRate)}</span>
                         </div>
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
@@ -241,10 +249,10 @@ export default function BaselineLearningPage() {
                         <TableCell className="font-medium">{device.name}</TableCell>
                         <TableCell className="font-mono text-sm">{device.ipAddress}</TableCell>
                         <TableCell>
-                          <span className="text-sm">{device.avgTrafficRate} pps</span>
+                          <span className="text-sm">{formatBytesPerSec(device.avgTrafficRate)}</span>
                         </TableCell>
                         <TableCell>
-                          <span className="text-sm">{device.trafficRate} pps</span>
+                          <span className="text-sm">{formatBytesPerSec(device.trafficRate)}</span>
                         </TableCell>
                         <TableCell>
                           <Badge

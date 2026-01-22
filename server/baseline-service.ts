@@ -85,20 +85,24 @@ export function addFlowToLearning(deviceId: number, flow: {
     if (learning) {
         learning.flows.push(flow);
 
-        // Feed to AI model for statistical learning
-        const { addFlowObservation } = require("./ai-anomaly-detector");
-        addFlowObservation(deviceId, flow);
+        // Log every 10th flow to confirm data is being collected
+        if (learning.flows.length % 10 === 1) {
+            console.log(`[BaselineService] Learning device ${deviceId}: ${learning.flows.length} flows collected`);
+        }
+
+        // Feed to AI model for statistical learning (async)
+        import("./ai-anomaly-detector").then(({ addFlowObservation }) => {
+            addFlowObservation(deviceId, flow);
+        }).catch(() => { });
 
         // Feed to Isolation Forest
-        try {
-            const { flowToFeatures, addTrainingSample } = require("./ml/isolation-forest");
+        import("./ml/isolation-forest").then(({ flowToFeatures, addTrainingSample }) => {
             const features = flowToFeatures(flow);
             addTrainingSample(deviceId, features);
-        } catch { /* Isolation Forest not available */ }
+        }).catch(() => { });
 
         // Feed to LSTM
-        try {
-            const { addTimestep } = require("./ml/lstm-detector");
+        import("./ml/lstm-detector").then(({ addTimestep }) => {
             addTimestep(deviceId, {
                 bytes: flow.bytes,
                 protocol: flow.destPort <= 443 ? flow.destPort / 443 : 0.5,
@@ -106,7 +110,7 @@ export function addFlowToLearning(deviceId: number, flow: {
                 hour: flow.timestamp.getHours() / 24,
                 connectionCount: learning.flows.length,
             });
-        } catch { /* LSTM not available */ }
+        }).catch(() => { });
     }
 }
 
@@ -141,9 +145,10 @@ export async function getLearningProgressFromDb(deviceId: number): Promise<numbe
 
     return Math.min(1, elapsed / durationMs);
 }
-
 /**
  * Restore active learning sessions from database on server startup
+ * After a power outage or restart, in-memory flows are lost, so we restart 
+ * learning from the beginning with the full original duration to be safe.
  */
 export async function restoreActiveLearning(): Promise<void> {
     console.log("[BaselineService] Restoring active learning sessions...");
@@ -153,38 +158,47 @@ export async function restoreActiveLearning(): Promise<void> {
         .from(deviceBaselines)
         .where(eq(deviceBaselines.isComplete, 0));
 
-    let restored = 0;
-    let completed = 0;
+    let restarted = 0;
 
     for (const baseline of incompleteBaselines) {
-        const startedAt = new Date(baseline.learningStartedAt);
         const durationMs = (baseline as any).learningDurationMs || 3600000;
-        const elapsed = Date.now() - startedAt.getTime();
-        const remaining = durationMs - elapsed;
 
-        if (remaining > 0) {
-            // Learning still in progress - restore the session
-            learningDevices.set(baseline.deviceId, {
-                startedAt,
-                durationMs,
-                flows: [], // Flows will be collected from now
-            });
-
-            // Schedule completion
-            setTimeout(async () => {
-                await completeBaselineLearning(baseline.deviceId);
-            }, remaining);
-
-            restored++;
-            console.log(`[BaselineService] Restored learning for device ${baseline.deviceId}, ${Math.round(remaining / 60000)}min remaining`);
-        } else {
-            // Learning should have completed - complete it now
-            await completeBaselineLearning(baseline.deviceId);
-            completed++;
+        // Get the device to restart learning properly
+        const device = await storage.getDevice(baseline.deviceId);
+        if (!device) {
+            console.log(`[BaselineService] Device ${baseline.deviceId} not found, skipping`);
+            continue;
         }
+
+        // Restart learning from the beginning with full duration
+        // (flows from before the restart are lost, so start fresh)
+        console.log(`[BaselineService] Restarting learning for ${device.name} from beginning (${Math.round(durationMs / 60000)}min)`);
+
+        // Reset the baseline record
+        await db.update(deviceBaselines)
+            .set({
+                learningStartedAt: new Date(),
+                learningCompletedAt: null,
+                flowsAnalyzed: 0,
+            })
+            .where(eq(deviceBaselines.deviceId, baseline.deviceId));
+
+        // Initialize fresh in-memory tracking
+        learningDevices.set(baseline.deviceId, {
+            startedAt: new Date(),
+            durationMs,
+            flows: [],
+        });
+
+        // Schedule completion with full duration
+        setTimeout(async () => {
+            await completeBaselineLearning(baseline.deviceId);
+        }, durationMs);
+
+        restarted++;
     }
 
-    console.log(`[BaselineService] Restored ${restored} learning sessions, completed ${completed} expired sessions`);
+    console.log(`[BaselineService] Restarted ${restarted} learning sessions from beginning`);
 }
 
 /**
@@ -610,12 +624,14 @@ export async function loadAIModelsFromDatabase(): Promise<void> {
     for (const baseline of baselines) {
         if (baseline.aiModels) {
             try {
-                const { importModel } = require("./ai-anomaly-detector");
+                const { importModel } = await import("./ai-anomaly-detector");
                 const models = baseline.aiModels as any;
 
                 if (models.statistical) {
-                    importModel(baseline.deviceId, models.statistical);
+                    // The statistical model already contains deviceId, pass it directly
+                    importModel(models.statistical);
                     loadedCount++;
+                    console.log(`[BaselineService] Loaded AI model for device ${baseline.deviceId}`);
                 }
             } catch (err) {
                 console.log(`[BaselineService] Failed to load model for device ${baseline.deviceId}:`, err);
