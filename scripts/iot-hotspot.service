@@ -1,0 +1,16 @@
+[Unit]
+Description=IoT-Secure WiFi Hotspot
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/sbin/modprobe aic_load_fw
+ExecStartPre=/sbin/modprobe aic8800_fdrv
+ExecStartPre=/bin/sleep 3
+ExecStart=/home/pi/Documents/v2/EdgeAISecurev2/scripts/start-iot-hotspot.sh
+ExecStop=/usr/bin/killall hostapd dnsmasq
+
+[Install]
+WantedBy=multi-user.target
