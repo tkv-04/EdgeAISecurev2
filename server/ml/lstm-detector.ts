@@ -5,9 +5,39 @@
  * - Learns to reconstruct normal traffic sequences
  * - High reconstruction error = anomaly
  * - Uses TensorFlow.js for Pi-optimized inference
+ * 
+ * NOTE: TensorFlow.js requires native bindings which may not be available
+ * on all platforms (especially Raspberry Pi ARM). This module gracefully
+ * degrades when TensorFlow is unavailable.
  */
 
-import * as tf from "@tensorflow/tfjs-node";
+// Lazy-load TensorFlow to avoid crashing on platforms without native bindings
+let tf: any = null;
+let tensorflowAvailable = false;
+
+async function loadTensorFlow(): Promise<boolean> {
+    if (tf !== null) return tensorflowAvailable;
+
+    try {
+        // Try pure JS version first (slower but more compatible)
+        tf = await import("@tensorflow/tfjs");
+        tensorflowAvailable = true;
+        console.log("[LSTM] TensorFlow.js loaded (pure JS backend)");
+        return true;
+    } catch (e1) {
+        try {
+            // Try native version
+            tf = await import("@tensorflow/tfjs-node");
+            tensorflowAvailable = true;
+            console.log("[LSTM] TensorFlow.js loaded (native backend)");
+            return true;
+        } catch (e2) {
+            console.log("[LSTM] TensorFlow.js not available - LSTM model disabled");
+            tensorflowAvailable = false;
+            return false;
+        }
+    }
+}
 
 // Configuration
 const SEQUENCE_LENGTH = 10;          // Number of timesteps
@@ -33,7 +63,7 @@ export interface TimeStepFeatures {
  */
 export interface LSTMModel {
     deviceId: number;
-    model: tf.LayersModel | null;
+    model: any | null;  // tf.LayersModel
     trained: boolean;
     trainingData: TimeStepFeatures[][];  // Sequences of features
     currentSequence: TimeStepFeatures[]; // Building current sequence
@@ -47,6 +77,7 @@ export interface LSTMModel {
 
 // Store models per device
 const lstmModels = new Map<number, LSTMModel>();
+
 
 /**
  * Initialize LSTM model for a device
@@ -120,7 +151,9 @@ export function addTimestep(deviceId: number, features: TimeStepFeatures): void 
 /**
  * Build the LSTM autoencoder architecture
  */
-function buildModel(): tf.LayersModel {
+function buildModel(): any {
+    if (!tf) return null;
+
     const model = tf.sequential();
 
     // Encoder
@@ -164,6 +197,13 @@ function buildModel(): tf.LayersModel {
  * Train the LSTM autoencoder
  */
 export async function trainLSTM(deviceId: number): Promise<boolean> {
+    // Check if TensorFlow is available
+    const available = await loadTensorFlow();
+    if (!available) {
+        console.log(`[LSTM] TensorFlow not available - skipping LSTM training for device ${deviceId}`);
+        return false;
+    }
+
     const lstmModel = getLSTM(deviceId);
 
     if (lstmModel.trainingData.length < 10) {
@@ -177,6 +217,10 @@ export async function trainLSTM(deviceId: number): Promise<boolean> {
         // Build model if not exists
         if (!lstmModel.model) {
             lstmModel.model = buildModel();
+            if (!lstmModel.model) {
+                console.log(`[LSTM] Failed to build model for device ${deviceId}`);
+                return false;
+            }
         }
 
         // Prepare training data
@@ -213,6 +257,11 @@ export async function trainLSTM(deviceId: number): Promise<boolean> {
  * Calculate reconstruction error for a sequence
  */
 export function reconstructionError(deviceId: number, sequence: TimeStepFeatures[]): number {
+    // TensorFlow must be loaded for this to work
+    if (!tf || !tensorflowAvailable) {
+        return 0;
+    }
+
     const lstmModel = lstmModels.get(deviceId);
 
     if (!lstmModel || !lstmModel.model || !lstmModel.trained) {

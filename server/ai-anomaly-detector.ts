@@ -16,10 +16,12 @@ const ENTROPY_THRESHOLD = 0.7;   // High entropy = suspicious
 const MIN_SAMPLES = 10;          // Minimum samples for reliable statistics
 
 // Weights for composite anomaly score (ensemble)
+// NOTE: LSTM disabled on Raspberry Pi (TensorFlow ARM issues)
+// TODO: Implement Python TFLite sidecar for LSTM support in future
 const WEIGHTS = {
-    statistical: 0.40,    // Statistical analysis weight
-    isolationForest: 0.35, // Isolation Forest weight
-    lstm: 0.25,           // LSTM weight (when available)
+    statistical: 0.55,     // Statistical analysis weight (increased from 0.40)
+    isolationForest: 0.45, // Isolation Forest weight (increased from 0.35)
+    lstm: 0.00,            // LSTM disabled - will be enabled with Python sidecar
 };
 
 // Sub-weights for statistical component

@@ -251,27 +251,31 @@ async function completeBaselineLearning(deviceId: number): Promise<void> {
         });
     }
 
-    // Train ML models
+    // Train ML models (use dynamic import for ES module compatibility)
     try {
-        const { trainForest, getForestSummary } = require("./ml/isolation-forest");
+        const { trainForest, getForestSummary } = await import("./ml/isolation-forest");
         const trained = trainForest(deviceId);
         if (trained) {
             const summary = getForestSummary(deviceId);
             console.log(`[BaselineService] Isolation Forest trained: ${summary.numTrees} trees`);
+        } else {
+            console.log(`[BaselineService] Isolation Forest training returned false`);
         }
     } catch (err) {
-        console.log(`[BaselineService] Isolation Forest training skipped:`, err);
+        console.log(`[BaselineService] Isolation Forest training error:`, err);
     }
 
     try {
-        const { trainLSTM, getLSTMSummary } = require("./ml/lstm-detector");
+        const { trainLSTM, getLSTMSummary } = await import("./ml/lstm-detector");
         const trained = await trainLSTM(deviceId);
         if (trained) {
             const summary = getLSTMSummary(deviceId);
             console.log(`[BaselineService] LSTM trained: ${summary.sequenceCount} sequences, loss=${summary.lastLoss}`);
+        } else {
+            console.log(`[BaselineService] LSTM training returned false`);
         }
     } catch (err) {
-        console.log(`[BaselineService] LSTM training skipped:`, err);
+        console.log(`[BaselineService] LSTM training error:`, err);
     }
 
     // Save AI models to database for persistence
@@ -408,7 +412,7 @@ export async function checkFlowForAnomaly(deviceId: number, flow: {
     }
 
     // Use AI analyzer for intelligent detection
-    const { analyzeFlow } = require("./ai-anomaly-detector");
+    const { analyzeFlow } = await import("./ai-anomaly-detector");
     const analysis = analyzeFlow(deviceId, {
         bytes: flow.bytes,
         protocol: flow.protocol,
