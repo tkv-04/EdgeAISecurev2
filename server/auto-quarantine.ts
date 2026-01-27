@@ -7,7 +7,7 @@
 
 import { storage } from "./storage";
 import { db } from "./db";
-import { devices } from "@shared/schema";
+import { devices, quarantineRecords } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import type { Device } from "@shared/schema";
 
@@ -67,8 +67,11 @@ export async function evaluateForQuarantine(
     anomalyScore: number,
     reason: string
 ): Promise<boolean> {
+    console.log(`[AutoQuarantine] Evaluating ${device.name} (ID: ${device.id}) - Score: ${anomalyScore}, Reason: ${reason}`);
+
     // Skip if below threshold
     if (anomalyScore < QUARANTINE_THRESHOLD) {
+        console.log(`[AutoQuarantine] SKIPPED: Score ${anomalyScore} below threshold ${QUARANTINE_THRESHOLD}`);
         return false;
     }
 
@@ -78,18 +81,37 @@ export async function evaluateForQuarantine(
         return false;
     }
 
-    // Skip if already quarantined
+    // Skip if already quarantined or blocked
     if (device.status === "quarantined" || device.status === "blocked") {
+        console.log(`[AutoQuarantine] SKIPPED: Device already ${device.status}`);
         return false;
     }
 
     // Skip if already in active quarantine
     if (activeQuarantines.has(device.id)) {
+        console.log(`[AutoQuarantine] SKIPPED: Device already in active quarantines Map`);
         return false;
     }
 
+    // Check if this is a repeat offender (quarantined 2+ times before)
+    const previousQuarantines = await countPreviousQuarantines(device.id);
+    const MAX_QUARANTINES_BEFORE_BLOCK = 2;
+
+    console.log(`[AutoQuarantine] ${device.name} has ${previousQuarantines} previous quarantines`);
+
+    if (previousQuarantines >= MAX_QUARANTINES_BEFORE_BLOCK) {
+        console.log(`[AutoQuarantine] REPEAT OFFENDER: ${device.name} has been quarantined ${previousQuarantines} times. BLOCKING permanently.`);
+        try {
+            await blockDevicePermanently(device, reason, anomalyScore, previousQuarantines);
+            return true;
+        } catch (error) {
+            console.error(`[AutoQuarantine] Failed to block repeat offender ${device.name}:`, error);
+            return false;
+        }
+    }
+
     // Auto-quarantine the device
-    console.log(`[AutoQuarantine] CRITICAL ANOMALY (score: ${anomalyScore.toFixed(2)}) - Quarantining ${device.name}`);
+    console.log(`[AutoQuarantine] CRITICAL ANOMALY (score: ${anomalyScore.toFixed(2)}) - Quarantining ${device.name} (quarantine #${previousQuarantines + 1})`);
 
     try {
         await quarantineDevice(device, reason, anomalyScore);
@@ -98,6 +120,66 @@ export async function evaluateForQuarantine(
         console.error(`[AutoQuarantine] Failed to quarantine ${device.name}:`, error);
         return false;
     }
+}
+
+/**
+ * Count how many times a device has been quarantined before
+ */
+async function countPreviousQuarantines(deviceId: number): Promise<number> {
+    // Count auto_quarantine alerts for this device
+    const alerts = await storage.getAlerts();
+    return alerts.filter(a =>
+        a.deviceId === deviceId &&
+        a.anomalyType === "auto_quarantine"
+    ).length;
+}
+
+/**
+ * Permanently block a repeat offender device
+ */
+async function blockDevicePermanently(
+    device: Device,
+    reason: string,
+    anomalyScore: number,
+    previousQuarantines: number
+): Promise<void> {
+    // Update device status to blocked
+    await db.update(devices).set({ status: "blocked" }).where(eq(devices.id, device.id));
+
+    // Block network access via iptables
+    const { networkBlockService } = await import("./network-block");
+    await networkBlockService.blockDevice(
+        device.id,
+        device.ipAddress,
+        device.macAddress,
+        `PERMANENTLY BLOCKED - Repeat offender (${previousQuarantines + 1} violations): ${reason}`,
+        "blocked"
+    );
+
+    // Create alert
+    const baselineService = await import("./baseline-service");
+    await baselineService.createAnomalyAlert(
+        device,
+        "auto_block",
+        `REPEAT OFFENDER BLOCKED: ${previousQuarantines + 1} violations. Latest: ${reason}`,
+        0.99  // Maximum severity for blocked devices
+    );
+
+    // Create log entry
+    await storage.createLog({
+        timestamp: new Date(),
+        eventType: "device_blocked",
+        performedBy: "system",
+        deviceId: device.id,
+        deviceName: device.name,
+        details: `Permanently blocked due to repeat violations (${previousQuarantines + 1} quarantines). Latest reason: ${reason}`,
+    });
+
+    // Send notification
+    const { notificationService } = await import("./notification-service");
+    await notificationService.notifyAutoBlocked(device.name, `${previousQuarantines + 1} violations. Latest: ${reason}`, device.id);
+
+    console.log(`[AutoQuarantine] ${device.name} PERMANENTLY BLOCKED after ${previousQuarantines + 1} quarantines`);
 }
 
 /**
@@ -147,6 +229,20 @@ async function quarantineDevice(
         timeQuarantined: new Date(),
     });
 
+    // Create log entry for audit trail
+    await storage.createLog({
+        timestamp: new Date(),
+        eventType: "device_quarantined",
+        performedBy: "system",
+        deviceId: device.id,
+        deviceName: device.name,
+        details: `Auto-quarantined due to: ${reason} (anomaly score: ${anomalyScore.toFixed(2)})`,
+    });
+
+    // Send notification
+    const { notificationService } = await import("./notification-service");
+    await notificationService.notifyDeviceQuarantined(device.name, `${reason} (score: ${anomalyScore.toFixed(2)})`, device.id);
+
     // Set up auto-release timer
     const autoReleaseTimer = setTimeout(() => {
         releaseFromQuarantine(device.id);
@@ -185,6 +281,28 @@ export async function releaseFromQuarantine(deviceId: number): Promise<boolean> 
 
         // Update status back to approved or monitoring
         await db.update(devices).set({ status: "approved" }).where(eq(devices.id, deviceId));
+
+        // Delete quarantine record from database so it updates the Quarantine page
+        await db.delete(quarantineRecords).where(eq(quarantineRecords.deviceId, deviceId));
+
+        // Create log entry
+        await storage.createLog({
+            timestamp: new Date(),
+            eventType: "device_released",
+            performedBy: "system",
+            deviceId: device.id,
+            deviceName: device.name,
+            details: `Auto-released from quarantine after timeout`,
+        });
+
+        // Send notification
+        const { notificationService } = await import("./notification-service");
+        await notificationService.notify(
+            "device_online",
+            "✅ Device Released from Quarantine",
+            `${device.name} has been automatically released from quarantine.`,
+            { deviceId: device.id, deviceName: device.name, severity: "info" }
+        );
 
         console.log(`[AutoQuarantine] ${device.name} released from quarantine`);
         return true;

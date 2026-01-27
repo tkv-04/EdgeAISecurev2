@@ -49,7 +49,7 @@ export default function AlertsPage() {
   const [severityFilter, setSeverityFilter] = useState<AlertSeverity | "all">("all");
   const [statusFilter, setStatusFilter] = useState<AlertStatus | "all">("all");
 
-  const { data: alerts, isLoading } = useQuery<Alert[]>({
+  const { data: alerts, isLoading, isFetching, refetch } = useQuery<Alert[]>({
     queryKey: ["/api/alerts"],
   });
 
@@ -138,18 +138,31 @@ export default function AlertsPage() {
             Monitor and respond to security anomalies detected by Edge AI
           </p>
         </div>
-        <Button
-          onClick={() => simulateAlert.mutate()}
-          disabled={simulateAlert.isPending}
-          data-testid="button-simulate-alert"
-        >
-          {simulateAlert.isPending ? (
-            <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <Bell className="mr-2 h-4 w-4" />
-          )}
-          Generate Simulated Alert
-        </Button>
+      <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => refetch()}
+            disabled={isFetching}
+            data-testid="button-refresh-alerts"
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
+            {isFetching ? 'Refreshing...' : 'Refresh'}
+          </Button>
+          {/* Temporarily disabled
+          <Button
+            onClick={() => simulateAlert.mutate()}
+            disabled={simulateAlert.isPending}
+            data-testid="button-simulate-alert"
+          >
+            {simulateAlert.isPending ? (
+              <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Bell className="mr-2 h-4 w-4" />
+            )}
+            Generate Simulated Alert
+          </Button>
+          */}
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -278,7 +291,7 @@ export default function AlertsPage() {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <StatusBadge status={alert.severity} />
+                        <StatusBadge status={alert.severity as AlertSeverity} />
                       </TableCell>
                       <TableCell>
                         <span
@@ -294,7 +307,7 @@ export default function AlertsPage() {
                         </span>
                       </TableCell>
                       <TableCell>
-                        <StatusBadge status={alert.status} />
+                        <StatusBadge status={alert.status as AlertStatus} />
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex items-center justify-end gap-1">
@@ -302,7 +315,7 @@ export default function AlertsPage() {
                             <Button
                               size="sm"
                               variant="ghost"
-                              onClick={() => acknowledgeAlert.mutate(alert.id)}
+                              onClick={() => acknowledgeAlert.mutate(String(alert.id))}
                               disabled={acknowledgeAlert.isPending}
                               data-testid={`button-acknowledge-${alert.id}`}
                             >
@@ -313,7 +326,7 @@ export default function AlertsPage() {
                             <Button
                               size="sm"
                               variant="ghost"
-                              onClick={() => resolveAlert.mutate(alert.id)}
+                              onClick={() => resolveAlert.mutate(String(alert.id))}
                               disabled={resolveAlert.isPending}
                               data-testid={`button-resolve-${alert.id}`}
                             >

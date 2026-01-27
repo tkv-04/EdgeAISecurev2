@@ -423,9 +423,12 @@ class SuricataReaderService extends EventEmitter {
 
                         // AUTO-QUARANTINE: Trigger for high-severity suspicious ports
                         if (portCheck.severity === "high") {
+                            console.log(`[Suricata] HIGH SEVERITY PORT DETECTED - Triggering auto-quarantine for ${device.name}`);
                             try {
-                                const { evaluateForQuarantine } = await import("./auto-quarantine");
-                                await evaluateForQuarantine(device, portScore, `Suspicious port ${flow.destPort}: ${portCheck.reason}`);
+                                const autoQuarantineModule = await import("./auto-quarantine");
+                                console.log(`[Suricata] Auto-quarantine module loaded, calling evaluateForQuarantine...`);
+                                const result = await autoQuarantineModule.evaluateForQuarantine(device, portScore, `Suspicious port ${flow.destPort}: ${portCheck.reason}`);
+                                console.log(`[Suricata] evaluateForQuarantine result: ${result}`);
                             } catch (err) {
                                 console.error(`[Suricata] Auto-quarantine error:`, err);
                             }

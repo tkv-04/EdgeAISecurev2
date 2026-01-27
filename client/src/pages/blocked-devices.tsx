@@ -6,6 +6,7 @@ import {
   ShieldAlert,
   Search,
   Trash2,
+  RefreshCw,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -43,7 +44,7 @@ export default function BlockedDevicesPage() {
   const [actionType, setActionType] = useState<"unblock" | "delete" | null>(null);
   const [unblockConfirmationText, setUnblockConfirmationText] = useState("");
 
-  const { data: devices, isLoading } = useQuery<Device[]>({
+  const { data: devices, isLoading, isFetching, refetch } = useQuery<Device[]>({
     queryKey: ["/api/devices"],
   });
 
@@ -151,14 +152,25 @@ export default function BlockedDevicesPage() {
                 </CardDescription>
               </div>
             </div>
-            <div className="relative w-full sm:w-72">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search devices..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10"
-              />
+            <div className="flex items-center gap-2">
+              <div className="relative w-full sm:w-72">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search devices..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-10"
+                />
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => refetch()}
+                disabled={isFetching}
+                data-testid="button-refresh-blocked"
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
+                {isFetching ? 'Refreshing...' : 'Refresh'}
+              </Button>
             </div>
           </div>
         </CardHeader>

@@ -1,5 +1,5 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { BookOpen, Wifi, TrendingUp } from "lucide-react";
+import { BookOpen, Wifi, TrendingUp, RefreshCw } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { StatusBadge } from "@/components/status-badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -27,7 +27,7 @@ function formatBytesPerSec(bytes: number): string {
 
 export default function BaselineLearningPage() {
   const { toast } = useToast();
-  const { data: devices, isLoading } = useQuery<Device[]>({
+  const { data: devices, isLoading, isFetching, refetch } = useQuery<Device[]>({
     queryKey: ["/api/devices"],
   });
 
@@ -75,11 +75,22 @@ export default function BaselineLearningPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Baseline Learning</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Monitor devices currently undergoing baseline behavior learning
-        </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold">Baseline Learning</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Monitor devices currently undergoing baseline behavior learning
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          onClick={() => refetch()}
+          disabled={isFetching}
+          data-testid="button-refresh-baseline"
+        >
+          <RefreshCw className={`mr-2 h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
+          {isFetching ? 'Refreshing...' : 'Refresh'}
+        </Button>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
@@ -240,9 +251,10 @@ export default function BaselineLearningPage() {
                   {approvedDevices.map((device) => {
                     const variance = device.trafficRate - device.avgTrafficRate;
                     const variancePercent =
-                      device.avgTrafficRate > 0
+                      device.avgTrafficRate > 0 && device.trafficRate > 0
                         ? Math.round((Math.abs(variance) / device.avgTrafficRate) * 100)
                         : 0;
+                    const isIdle = device.trafficRate === 0;
 
                     return (
                       <TableRow key={device.id} data-testid={`row-approved-${device.id}`}>
@@ -257,14 +269,16 @@ export default function BaselineLearningPage() {
                         <TableCell>
                           <Badge
                             variant={
-                              variancePercent > 50
-                                ? "destructive"
-                                : variancePercent > 25
-                                  ? "secondary"
-                                  : "default"
+                              isIdle
+                                ? "outline"
+                                : variancePercent > 50
+                                  ? "destructive"
+                                  : variancePercent > 25
+                                    ? "secondary"
+                                    : "default"
                             }
                           >
-                            {variancePercent}%
+                            {isIdle ? "Idle" : `${variancePercent}%`}
                           </Badge>
                         </TableCell>
                         <TableCell>

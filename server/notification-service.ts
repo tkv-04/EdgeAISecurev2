@@ -6,6 +6,7 @@ export type NotificationType =
     | "device_offline"
     | "device_online"
     | "suspicious_activity"
+    | "device_quarantined"
     | "auto_blocked"
     | "alert_created";
 
@@ -234,11 +235,20 @@ class NotificationService extends EventEmitter {
         );
     }
 
+    async notifyDeviceQuarantined(deviceName: string, reason: string, deviceId?: number): Promise<void> {
+        await this.notify(
+            "device_quarantined",
+            "🔒 Device Quarantined",
+            `${deviceName} has been auto-quarantined. Reason: ${reason}`,
+            { deviceId, deviceName, severity: "warning" }
+        );
+    }
+
     async notifyAutoBlocked(deviceName: string, reason: string, deviceId?: number): Promise<void> {
         await this.notify(
             "auto_blocked",
-            "Device Auto-Blocked",
-            `${deviceName} has been automatically blocked. Reason: ${reason}`,
+            "🚫 Device Permanently Blocked",
+            `${deviceName} has been permanently blocked (repeat offender). Reason: ${reason}`,
             { deviceId, deviceName, severity: "critical" }
         );
     }
