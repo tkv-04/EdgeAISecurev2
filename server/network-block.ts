@@ -42,7 +42,7 @@ interface BlockedDevice {
 }
 
 let settings: NetworkBlockSettings = {
-    enabled: false,
+    enabled: true,  // Network blocking enabled by default
     method: "local",
 };
 
