@@ -17,6 +17,7 @@
 #include <ESP8266HTTPClient.h>
 #include <ESP8266WebServer.h>
 #include <WiFiClient.h>
+#include <WiFiUdp.h>
 
 // ==================== CONFIGURATION ====================
 // WiFi Settings (IoT-Secure Hotspot)
@@ -54,6 +55,14 @@ unsigned long debounceDelay = 50;
 bool anomalyMode = false;
 int anomalyPhase = 0;
 
+// Automatic traffic generation intervals (milliseconds)
+// HIGH FREQUENCY for algorithm training - will generate ~20+ flows/min
+const unsigned long HEARTBEAT_INTERVAL = 5000;   // Traffic burst every 5 seconds
+const unsigned long NTP_INTERVAL = 60000;        // NTP every 1 minute
+unsigned long lastHeartbeat = 0;
+unsigned long lastNtpSync = 0;
+unsigned long trafficCount = 0;
+
 // ==================== SETUP ====================
 void setup() {
   Serial.begin(115200);
@@ -61,10 +70,10 @@ void setup() {
   
   // Initialize pins
   pinMode(RELAY_PIN, OUTPUT);
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BUTTON_PIN, INPUT);  // No pullup - HIGH triggers anomaly
   pinMode(LED_PIN, OUTPUT);
   
-  digitalWrite(RELAY_PIN, LOW);
+  digitalWrite(RELAY_PIN, HIGH);  // HIGH = OFF for active-LOW relay
   digitalWrite(LED_PIN, HIGH);  // LED off (inverted)
   
   // Connect to WiFi
@@ -84,6 +93,9 @@ void loop() {
   
   // Check button
   checkButton();
+  
+  // Generate normal traffic for behavior learning (always runs)
+  generateNormalTraffic();
   
   // If in anomaly mode, continue anomaly sequence
   if (anomalyMode) {
@@ -124,6 +136,147 @@ void connectWiFi() {
   }
 }
 
+// ==================== AUTOMATIC TRAFFIC GENERATION ====================
+// This generates normal IoT traffic patterns for EdgeAI to learn baseline behavior
+// HIGH FREQUENCY VERSION - generates ~20+ flows per minute for algorithm training
+
+void generateNormalTraffic() {
+  unsigned long currentMillis = millis();
+  
+  // Traffic burst every 5 seconds (12 bursts/min = lots of flows)
+  if (currentMillis - lastHeartbeat >= HEARTBEAT_INTERVAL) {
+    lastHeartbeat = currentMillis;
+    trafficCount++;
+    
+    // Rotate through different traffic types for variety
+    int trafficType = trafficCount % 6;
+    
+    switch (trafficType) {
+      case 0:
+        // DNS Query #1 - NTP server
+        { 
+          IPAddress result;
+          WiFi.hostByName("pool.ntp.org", result);
+        }
+        break;
+        
+      case 1:
+        // DNS Query #2 - Google
+        {
+          IPAddress result;
+          WiFi.hostByName("www.google.com", result);
+        }
+        break;
+        
+      case 2:
+        // HTTP to gateway (like checking for updates)
+        {
+          WiFiClient client;
+          client.setTimeout(500);
+          if (client.connect(WiFi.gatewayIP(), 80)) {
+            client.print("GET /status HTTP/1.1\r\n");
+            client.print("Host: ");
+            client.print(WiFi.gatewayIP().toString());
+            client.print("\r\nUser-Agent: ESP8266-IoT/1.0\r\n");
+            client.print("Connection: close\r\n\r\n");
+            delay(20);
+            client.stop();
+          }
+        }
+        break;
+        
+      case 3:
+        // HTTP to internal IP (like talking to another IoT device)
+        {
+          WiFiClient client;
+          client.setTimeout(200);
+          IPAddress target(192, 168, 50, 1);  // Gateway
+          if (client.connect(target, 80)) {
+            client.print("GET /api/health HTTP/1.1\r\n");
+            client.print("Host: iot-device\r\nConnection: close\r\n\r\n");
+            delay(10);
+            client.stop();
+          }
+        }
+        break;
+        
+      case 4:
+        // DNS Query #3 - time server
+        {
+          IPAddress result;
+          WiFi.hostByName("time.google.com", result);
+        }
+        break;
+        
+      case 5:
+        // TCP connection to common IoT port (like MQTT broker check)
+        {
+          WiFiClient client;
+          client.setTimeout(200);
+          if (client.connect(WiFi.gatewayIP(), 1883)) {
+            // Send MQTT PINGREQ-like packet
+            byte pingReq[] = {0xC0, 0x00};
+            client.write(pingReq, 2);
+            delay(10);
+            client.stop();
+          }
+        }
+        break;
+    }
+    
+    // Also do a secondary HTTP request every burst for more flows
+    {
+      WiFiClient client;
+      client.setTimeout(300);
+      if (client.connect(WiFi.gatewayIP(), 80)) {
+        client.print("GET /heartbeat?id=");
+        client.print(trafficCount);
+        client.print(" HTTP/1.1\r\nHost: ");
+        client.print(WiFi.gatewayIP().toString());
+        client.print("\r\nConnection: close\r\n\r\n");
+        delay(15);
+        client.stop();
+      }
+    }
+    
+    // Log every 20 heartbeats (~100 seconds)
+    if (trafficCount % 20 == 0) {
+      Serial.print("[Traffic] Count: ");
+      Serial.print(trafficCount);
+      Serial.print(" | Flows: ~");
+      Serial.print(trafficCount * 3);  // Estimate 3 flows per burst
+      Serial.print(" | RSSI: ");
+      Serial.print(WiFi.RSSI());
+      Serial.println(" dBm");
+    }
+  }
+  
+  // NTP Sync every minute (generates UDP flow)
+  if (currentMillis - lastNtpSync >= NTP_INTERVAL) {
+    lastNtpSync = currentMillis;
+    
+    WiFiUDP udp;
+    const int NTP_PACKET_SIZE = 48;
+    byte packetBuffer[NTP_PACKET_SIZE];
+    
+    memset(packetBuffer, 0, NTP_PACKET_SIZE);
+    packetBuffer[0] = 0b11100011;
+    packetBuffer[1] = 0;
+    packetBuffer[2] = 6;
+    packetBuffer[3] = 0xEC;
+    
+    IPAddress ntpIP;
+    if (WiFi.hostByName("pool.ntp.org", ntpIP)) {
+      udp.begin(random(1024, 65535));  // Random source port
+      udp.beginPacket(ntpIP, 123);
+      udp.write(packetBuffer, NTP_PACKET_SIZE);
+      udp.endPacket();
+      delay(10);
+      udp.stop();
+    }
+  }
+}
+
 // ==================== WEB SERVER ====================
 void setupWebServer() {
   // Root page - device status
@@ -150,7 +303,7 @@ void setupWebServer() {
   // Relay control endpoints
   server.on("/relay/on", HTTP_GET, []() {
     relayState = true;
-    digitalWrite(RELAY_PIN, HIGH);
+    digitalWrite(RELAY_PIN, LOW);  // LOW = ON for active-LOW relay
     Serial.println("[Relay] ON");
     server.send(200, "application/json", "{\"state\":\"on\"}");
     notifyHA();
@@ -158,7 +311,7 @@ void setupWebServer() {
   
   server.on("/relay/off", HTTP_GET, []() {
     relayState = false;
-    digitalWrite(RELAY_PIN, LOW);
+    digitalWrite(RELAY_PIN, HIGH);  // HIGH = OFF for active-LOW relay
     Serial.println("[Relay] OFF");
     server.send(200, "application/json", "{\"state\":\"off\"}");
     notifyHA();
@@ -166,7 +319,7 @@ void setupWebServer() {
   
   server.on("/relay/toggle", HTTP_GET, []() {
     relayState = !relayState;
-    digitalWrite(RELAY_PIN, relayState ? HIGH : LOW);
+    digitalWrite(RELAY_PIN, relayState ? LOW : HIGH);  // Inverted for active-LOW relay
     Serial.println("[Relay] " + String(relayState ? "ON" : "OFF"));
     server.send(200, "application/json", "{\"state\":\"" + String(relayState ? "on" : "off") + "\"}");
     notifyHA();
@@ -191,31 +344,40 @@ void setupWebServer() {
 
 // ==================== BUTTON HANDLER ====================
 void checkButton() {
+  static unsigned long lastDebugPrint = 0;
   int reading = digitalRead(BUTTON_PIN);
   
-  if (reading != lastButtonState) {
-    lastDebounceTime = millis();
+  // Debug output every 2 seconds - shows current D2 state
+  if (millis() - lastDebugPrint > 2000) {
+    lastDebugPrint = millis();
+    Serial.print("[D2 Status] Pin = ");
+    Serial.print(reading == HIGH ? "HIGH" : "LOW");
+    Serial.print(" | Anomaly Mode = ");
+    Serial.println(anomalyMode ? "ACTIVE" : "inactive");
   }
   
-  if ((millis() - lastDebounceTime) > debounceDelay) {
-    if (reading == LOW && lastButtonState == HIGH) {
-      // Button pressed!
-      Serial.println("\n!!! ANOMALY BUTTON PRESSED !!!");
-      if (!anomalyMode) {
-        startAnomalySequence();
-      } else {
-        stopAnomalySequence();
-      }
-    }
+  // Simple logic: If D2 is HIGH, start anomaly (if not already running)
+  if (reading == HIGH && !anomalyMode) {
+    Serial.println("\n!!! D2 DETECTED HIGH !!!");
+    startAnomalySequence();
   }
   
-  lastButtonState = reading;
+  // If D2 goes LOW while anomaly is running, stop it
+  if (reading == LOW && anomalyMode) {
+    Serial.println("\n!!! D2 DETECTED LOW - STOPPING !!!");
+    stopAnomalySequence();
+  }
 }
 
 // ==================== ANOMALY SEQUENCE ====================
 void startAnomalySequence() {
-  Serial.println("=== STARTING ANOMALY SEQUENCE ===");
-  Serial.println("This will trigger suspicious network activity to test detection.");
+  Serial.println("\n");
+  Serial.println("****************************************");
+  Serial.println("*    D2 = HIGH - ANOMALY TRIGGERED!    *");
+  Serial.println("****************************************");
+  Serial.println("Starting suspicious network activity...");
+  Serial.println("Watch EdgeAI dashboard for alerts!");
+  Serial.println("");
   anomalyMode = true;
   anomalyPhase = 0;
 }

@@ -398,6 +398,42 @@ class SuricataReaderService extends EventEmitter {
 
             // If device is approved, check for anomalies
             if (device.status === "approved") {
+                // FIRST: Check for suspicious ports immediately (bypasses rate limiting)
+                const portCheck = isSuspiciousPort(flow.destPort);
+                if (portCheck.suspicious) {
+                    const portScore = portCheck.severity === "high" ? 0.95 : 0.75;
+                    const alertKey = `${device.id}:suspicious_port:${flow.destPort}`;
+                    const lastPortAlert = this.lastAnomalyAlerts.get(alertKey);
+                    const nowPort = Date.now();
+
+                    // Rate limit per suspicious port (1 per 2 minutes per port)
+                    if (!lastPortAlert || (nowPort - lastPortAlert) > 2 * 60 * 1000) {
+                        this.lastAnomalyAlerts.set(alertKey, nowPort);
+                        await storage.createAlert({
+                            deviceId: device.id,
+                            deviceName: device.name,
+                            timestamp: flow.timestamp,
+                            anomalyType: "suspicious_port",
+                            severity: portCheck.severity === "high" ? "critical" : "high",
+                            status: "open",
+                            anomalyScore: portScore,
+                            description: `🚨 SUSPICIOUS PORT: ${flow.destPort} - ${portCheck.reason}`,
+                        });
+                        console.log(`[Suricata] SUSPICIOUS PORT: ${device.name} -> port ${flow.destPort} (${portCheck.reason})`);
+
+                        // AUTO-QUARANTINE: Trigger for high-severity suspicious ports
+                        if (portCheck.severity === "high") {
+                            try {
+                                const { evaluateForQuarantine } = await import("./auto-quarantine");
+                                await evaluateForQuarantine(device, portScore, `Suspicious port ${flow.destPort}: ${portCheck.reason}`);
+                            } catch (err) {
+                                console.error(`[Suricata] Auto-quarantine error:`, err);
+                            }
+                        }
+                    }
+                }
+
+                // THEN: Regular anomaly detection
                 const result = await checkFlowForAnomaly(device.id, flow);
                 const { isAnomaly, reasons } = result;
                 const anomalyScore = (result as any).anomalyScore || 0.5;

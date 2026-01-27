@@ -12,7 +12,7 @@ import { eq } from "drizzle-orm";
 import type { Device } from "@shared/schema";
 
 // Configuration
-const QUARANTINE_THRESHOLD = 0.8;  // Score above which to auto-quarantine
+const QUARANTINE_THRESHOLD = 0.7;  // Score above which to auto-quarantine
 const QUARANTINE_DURATION_MS = 60 * 60 * 1000;  // 1 hour auto-release
 
 // Whitelist - devices that should never be auto-quarantined
@@ -138,6 +138,14 @@ async function quarantineDevice(
         `Device auto-quarantined: ${reason}`,
         anomalyScore
     );
+
+    // Create quarantine record for the Quarantine page UI
+    await storage.createQuarantineRecord({
+        deviceId: device.id,
+        deviceName: device.name,
+        reason: `${reason} (score: ${anomalyScore.toFixed(2)})`,
+        timeQuarantined: new Date(),
+    });
 
     // Set up auto-release timer
     const autoReleaseTimer = setTimeout(() => {
