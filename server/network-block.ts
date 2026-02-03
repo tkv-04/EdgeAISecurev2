@@ -732,14 +732,34 @@ async function blockWithDhcp(targetMAC: string, reason: string): Promise<boolean
     }
 }
 
-export async function unblockDevice(ipAddress: string): Promise<boolean> {
+export async function unblockDevice(ipAddress: string, macAddressParam?: string): Promise<boolean> {
     const blocked = blockedDevices.get(ipAddress);
-    const macAddress = blocked?.macAddress || "";
+    // Use provided MAC or fall back to in-memory map
+    const macAddress = macAddressParam || blocked?.macAddress || "";
+
+    console.log(`[NetworkBlock] Unblocking device IP: ${ipAddress}, MAC: ${macAddress}`);
 
     // Remove from hostapd deny list to allow WiFi reconnection
     if (macAddress) {
         await removeFromHostapdDenyList(macAddress);
         console.log(`[NetworkBlock] Removed ${macAddress} from WiFi deny list, device can reconnect`);
+
+        // Remove iptables DROP rules that were added during blocking
+        try {
+            await execAsync(`sudo iptables -D INPUT -m mac --mac-source ${macAddress} -j DROP 2>/dev/null || true`);
+            await execAsync(`sudo iptables -D FORWARD -m mac --mac-source ${macAddress} -j DROP 2>/dev/null || true`);
+            console.log(`[NetworkBlock] Removed iptables INPUT/FORWARD DROP rules for ${macAddress}`);
+        } catch (error) {
+            console.log(`[NetworkBlock] Could not remove iptables MAC rules (may not exist):`, error);
+        }
+    }
+
+    // Remove OUTPUT rule by IP
+    try {
+        await execAsync(`sudo iptables -D OUTPUT -d ${ipAddress} -j DROP 2>/dev/null || true`);
+        console.log(`[NetworkBlock] Removed iptables OUTPUT DROP rule for ${ipAddress}`);
+    } catch (error) {
+        console.log(`[NetworkBlock] Could not remove iptables OUTPUT rule (may not exist):`, error);
     }
 
     switch (settings.method) {

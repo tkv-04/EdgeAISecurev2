@@ -1000,7 +1000,7 @@ export async function registerRoutes(
 
     // Unblock from network (removes from hostapd deny list and iptables)
     const { networkBlockService } = await import("./network-block");
-    await networkBlockService.unblockDevice(device.ipAddress);
+    await networkBlockService.unblockDevice(device.ipAddress, device.macAddress);
 
     // Update device status to monitoring (learning phase)
     await storage.updateDeviceStatus(id, "monitoring");
