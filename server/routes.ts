@@ -544,6 +544,12 @@ export async function registerRoutes(
     );
 
     if (blocked) {
+      // Update device status in database
+      await storage.updateDeviceStatus(id, "blocked");
+
+      // Update access control
+      await updateDeviceAccess(device.macAddress, "blocked");
+
       await storage.createLog({
         timestamp: new Date(),
         eventType: "device_blocked",
@@ -592,34 +598,6 @@ export async function registerRoutes(
     }
 
     res.json({ success: quarantined, level: "quarantined", method: networkBlockService.getSettings().method });
-  });
-
-  app.post("/api/devices/:id/unblock", async (req, res) => {
-    const id = parseInt(req.params.id);
-    if (isNaN(id)) {
-      return res.status(400).json({ error: "Invalid device ID" });
-    }
-
-    const device = await storage.getDevice(id);
-    if (!device) {
-      return res.status(404).json({ error: "Device not found" });
-    }
-
-    const { networkBlockService } = await import("./network-block");
-    const unblocked = await networkBlockService.unblockDevice(device.ipAddress);
-
-    if (unblocked) {
-      await storage.createLog({
-        timestamp: new Date(),
-        eventType: "device_unblocked",
-        performedBy: "admin",
-        deviceId: device.id,
-        deviceName: device.name,
-        details: `Device unblocked: ${device.name}`,
-      });
-    }
-
-    res.json({ success: unblocked });
   });
 
   // Background scanner status endpoint
@@ -1009,31 +987,6 @@ export async function registerRoutes(
     res.json(device);
   });
 
-  app.post("/api/devices/:id/block", async (req, res) => {
-    const id = parseInt(req.params.id);
-    if (isNaN(id)) {
-      return res.status(400).json({ error: "Invalid device ID" });
-    }
-    const device = await storage.updateDeviceStatus(id, "blocked");
-    if (!device) {
-      return res.status(404).json({ error: "Device not found" });
-    }
-
-    await storage.createLog({
-      timestamp: new Date(),
-      eventType: "device_blocked",
-      performedBy: "admin",
-      deviceId: device.id,
-      deviceName: device.name,
-      details: `Device ${device.name} was manually blocked from the network`,
-    });
-
-    // Update access control to block this device
-    await updateDeviceAccess(device.macAddress, "blocked");
-
-    res.json(device);
-  });
-
   app.post("/api/devices/:id/unblock", async (req, res) => {
     const id = parseInt(req.params.id);
     if (isNaN(id)) {
@@ -1044,6 +997,10 @@ export async function registerRoutes(
     if (!device) {
       return res.status(404).json({ error: "Device not found" });
     }
+
+    // Unblock from network (removes from hostapd deny list and iptables)
+    const { networkBlockService } = await import("./network-block");
+    await networkBlockService.unblockDevice(device.ipAddress);
 
     // Update device status to monitoring (learning phase)
     await storage.updateDeviceStatus(id, "monitoring");

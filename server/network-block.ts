@@ -13,10 +13,15 @@
 
 import { exec, spawn, ChildProcess } from "child_process";
 import { promisify } from "util";
+import * as fs from "fs/promises";
 import { storage } from "./storage";
 import { notificationService } from "./notification-service";
 
 const execAsync = promisify(exec);
+
+// Hostapd configuration
+const HOSTAPD_DENY_FILE = "/etc/hostapd/hostapd.deny";
+const HOSTAPD_INTERFACE = "wlan1";  // IoT-Secure hotspot interface
 
 export type BlockingMethod = "arp" | "pihole" | "openwrt" | "local";
 
@@ -83,6 +88,121 @@ async function getOurMac(iface: string): Promise<string | null> {
         return null;
     }
 }
+
+// ==================== HOSTAPD WiFi BLOCKING ====================
+
+/**
+ * Deauthenticate a device from the IoT-Secure WiFi hotspot
+ * This kicks the device off the WiFi immediately
+ */
+async function deauthenticateFromWifi(macAddress: string): Promise<boolean> {
+    try {
+        const mac = macAddress.toUpperCase();
+        console.log(`[NetworkBlock] Deauthenticating ${mac} from WiFi (${HOSTAPD_INTERFACE})`);
+
+        // Use hostapd_cli to send deauthentication frame
+        await execAsync(`sudo hostapd_cli -i ${HOSTAPD_INTERFACE} deauthenticate ${mac}`);
+        console.log(`[NetworkBlock] Successfully deauthenticated ${mac} from WiFi`);
+        return true;
+    } catch (error) {
+        console.error(`[NetworkBlock] Failed to deauthenticate device:`, error);
+        return false;
+    }
+}
+
+/**
+ * Add a MAC address to the hostapd deny list
+ * This prevents the device from reconnecting to IoT-Secure hotspot
+ */
+async function addToHostapdDenyList(macAddress: string): Promise<boolean> {
+    try {
+        const mac = macAddress.toUpperCase();
+
+        // Ensure deny file exists
+        try {
+            await fs.access(HOSTAPD_DENY_FILE);
+        } catch {
+            // Create the file if it doesn't exist
+            await execAsync(`sudo touch ${HOSTAPD_DENY_FILE}`);
+            await execAsync(`sudo chmod 644 ${HOSTAPD_DENY_FILE}`);
+        }
+
+        // Read current deny list
+        const content = await execAsync(`sudo cat ${HOSTAPD_DENY_FILE}`);
+        const existingMacs = content.stdout.split('\n').map(m => m.trim().toUpperCase()).filter(Boolean);
+
+        // Check if already in list
+        if (existingMacs.includes(mac)) {
+            console.log(`[NetworkBlock] MAC ${mac} already in hostapd deny list`);
+            return true;
+        }
+
+        // Add to deny list
+        await execAsync(`echo "${mac}" | sudo tee -a ${HOSTAPD_DENY_FILE}`);
+        console.log(`[NetworkBlock] Added ${mac} to hostapd deny list`);
+
+        // Reload hostapd to apply changes (if running)
+        try {
+            await execAsync(`sudo systemctl reload hostapd 2>/dev/null || true`);
+        } catch {
+            // hostapd might not be running, that's okay
+        }
+
+        return true;
+    } catch (error) {
+        console.error(`[NetworkBlock] Failed to add MAC to hostapd deny list:`, error);
+        return false;
+    }
+}
+
+/**
+ * Remove a MAC address from the hostapd deny list
+ * This allows the device to reconnect to IoT-Secure hotspot
+ */
+async function removeFromHostapdDenyList(macAddress: string): Promise<boolean> {
+    try {
+        const mac = macAddress.toUpperCase();
+
+        // Check if deny file exists
+        try {
+            await fs.access(HOSTAPD_DENY_FILE);
+        } catch {
+            console.log(`[NetworkBlock] Hostapd deny file doesn't exist, nothing to remove`);
+            return true;
+        }
+
+        // Read current deny list
+        const content = await execAsync(`sudo cat ${HOSTAPD_DENY_FILE}`);
+        const existingMacs = content.stdout.split('\n').map(m => m.trim()).filter(Boolean);
+
+        // Filter out the MAC to remove
+        const newMacs = existingMacs.filter(m => m.toUpperCase() !== mac);
+
+        // Write back the filtered list
+        if (newMacs.length !== existingMacs.length) {
+            const newContent = newMacs.join('\n') + (newMacs.length > 0 ? '\n' : '');
+            await execAsync(`echo "${newContent}" | sudo tee ${HOSTAPD_DENY_FILE}`);
+            console.log(`[NetworkBlock] Removed ${mac} from hostapd deny list`);
+
+            // Reload hostapd to apply changes (if running)
+            try {
+                await execAsync(`sudo systemctl reload hostapd 2>/dev/null || true`);
+            } catch {
+                // hostapd might not be running, that's okay
+            }
+        } else {
+            console.log(`[NetworkBlock] MAC ${mac} was not in hostapd deny list`);
+        }
+
+        return true;
+    } catch (error) {
+        console.error(`[NetworkBlock] Failed to remove MAC from hostapd deny list:`, error);
+        return false;
+    }
+}
+
+// ==================== END HOSTAPD BLOCKING ====================
+
 
 /**
  * Block a device using iptables MAC filtering
@@ -499,7 +619,15 @@ export async function blockDevice(
     let success = false;
 
     if (level === "blocked") {
-        // BLOCKED zone: Full DHCP-level denial
+        // BLOCKED zone: Full DHCP-level denial + WiFi disconnection
+
+        // Step 1: Kick device off WiFi immediately
+        await deauthenticateFromWifi(macAddress);
+
+        // Step 2: Add to hostapd deny list to prevent reconnection
+        await addToHostapdDenyList(macAddress);
+
+        // Step 3: Apply network-level blocking as backup
         // Try DHCP blocking first, fall back to traffic blocking
         if (settings.method === "pihole" && settings.piholeHost && settings.piholeApiKey) {
             success = await blockWithDhcp(macAddress, reason);
@@ -514,6 +642,8 @@ export async function blockDevice(
             await execAsync(`sudo iptables -A OUTPUT -d ${ipAddress} -j DROP 2>/dev/null || true`);
             success = true;
         }
+
+        console.log(`[NetworkBlock] Device ${macAddress} blocked from WiFi and network`);
     } else {
         // QUARANTINE zone: Traffic filtering only
         switch (settings.method) {
@@ -605,6 +735,12 @@ async function blockWithDhcp(targetMAC: string, reason: string): Promise<boolean
 export async function unblockDevice(ipAddress: string): Promise<boolean> {
     const blocked = blockedDevices.get(ipAddress);
     const macAddress = blocked?.macAddress || "";
+
+    // Remove from hostapd deny list to allow WiFi reconnection
+    if (macAddress) {
+        await removeFromHostapdDenyList(macAddress);
+        console.log(`[NetworkBlock] Removed ${macAddress} from WiFi deny list, device can reconnect`);
+    }
 
     switch (settings.method) {
         case "arp":
