@@ -280,7 +280,7 @@ export function reconstructionError(deviceId: number, sequence: TimeStepFeatures
         const input = tf.tensor3d([normalized]);
 
         // Get reconstruction
-        const reconstruction = lstmModel.model.predict(input) as tf.Tensor;
+        const reconstruction = lstmModel.model.predict(input) as any;
 
         // Calculate MSE
         const mse = tf.losses.meanSquaredError(input, reconstruction).dataSync()[0];

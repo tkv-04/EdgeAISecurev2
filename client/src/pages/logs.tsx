@@ -203,7 +203,7 @@ export default function LogsPage() {
                 </TableHeader>
                 <TableBody>
                   {filteredLogs.map((log) => {
-                    const eventConfig = EVENT_TYPE_LABELS[log.eventType];
+                    const eventConfig = EVENT_TYPE_LABELS[log.eventType as LogEventType];
                     return (
                       <TableRow
                         key={log.id}

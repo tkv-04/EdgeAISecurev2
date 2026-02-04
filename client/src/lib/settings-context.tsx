@@ -7,6 +7,8 @@ interface SettingsContextType {
 }
 
 const defaultSettings: Settings = {
+  id: 1,
+  userId: 1,
   anomalySensitivity: "medium",
   alertRefreshInterval: 5,
   theme: "light",

@@ -95,9 +95,9 @@ export default function QuarantinePage() {
     if (!selectedRecord || !actionType) return;
     
     if (actionType === "release") {
-      releaseMutation.mutate(selectedRecord.id);
+      releaseMutation.mutate(String(selectedRecord.id));
     } else {
-      blockMutation.mutate(selectedRecord.id);
+      blockMutation.mutate(String(selectedRecord.id));
     }
   };
 
