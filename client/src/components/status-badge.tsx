@@ -55,6 +55,12 @@ const statusConfig: Record<string, { bg: string; text: string; dot: string; labe
     dot: "bg-status-danger",
     label: "High",
   },
+  critical: {
+    bg: "bg-status-danger/15",
+    text: "text-status-danger",
+    dot: "bg-status-danger",
+    label: "Critical",
+  },
   open: {
     bg: "bg-status-danger/15",
     text: "text-status-danger",

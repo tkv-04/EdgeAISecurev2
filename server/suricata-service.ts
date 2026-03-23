@@ -386,18 +386,28 @@ class SuricataReaderService extends EventEmitter {
                         deviceName: device.name,
                         timestamp: flow.timestamp,
                         anomalyType: "suspicious_port",
-                        severity: "high",
+                        severity: "critical",  // Changed from "high" to "critical" for high-severity ports
                         status: "open",
-                        anomalyScore: 85,
+                        anomalyScore: 0.95,  // Changed from 85 to 0.95 for consistency
                         description: `⚠️ Suspicious port detected: ${flow.destPort} - ${portCheck.reason}`,
                     });
                     console.log(`[Suricata] SUSPICIOUS PORT ALERT: ${device.name} connected to port ${flow.destPort} - ${portCheck.reason}`);
+
+                    // Auto-quarantine even during learning for critical threats
+                    console.log(`[Suricata] CRITICAL THREAT during learning - Triggering auto-quarantine for ${device.name}`);
+                    try {
+                        const autoQuarantineModule = await import("./auto-quarantine");
+                        const result = await autoQuarantineModule.evaluateForQuarantine(device, 0.95, `Critical suspicious port ${flow.destPort}: ${portCheck.reason}`);
+                        console.log(`[Suricata] evaluateForQuarantine result (learning mode): ${result}`);
+                    } catch (err) {
+                        console.error(`[Suricata] Auto-quarantine error during learning:`, err);
+                    }
                 }
                 return;
             }
 
             // If device is approved, check for anomalies
-            if (device.status === "approved") {
+            if (device.status === "approved" || device.status === "monitoring") {
                 // FIRST: Check for suspicious ports immediately (bypasses rate limiting)
                 const portCheck = isSuspiciousPort(flow.destPort);
                 if (portCheck.suspicious) {
@@ -420,18 +430,21 @@ class SuricataReaderService extends EventEmitter {
                             description: `🚨 SUSPICIOUS PORT: ${flow.destPort} - ${portCheck.reason}`,
                         });
                         console.log(`[Suricata] SUSPICIOUS PORT: ${device.name} -> port ${flow.destPort} (${portCheck.reason})`);
+                        console.log(`[Suricata] DEBUG: portCheck.severity = "${portCheck.severity}", device.status = "${device.status}", portScore = ${portScore}`);
 
                         // AUTO-QUARANTINE: Trigger for high-severity suspicious ports
                         if (portCheck.severity === "high") {
                             console.log(`[Suricata] HIGH SEVERITY PORT DETECTED - Triggering auto-quarantine for ${device.name}`);
                             try {
                                 const autoQuarantineModule = await import("./auto-quarantine");
-                                console.log(`[Suricata] Auto-quarantine module loaded, calling evaluateForQuarantine...`);
+                                console.log(`[Suricata] Auto-quarantine module loaded, calling evaluateForQuarantine with score ${portScore}...`);
                                 const result = await autoQuarantineModule.evaluateForQuarantine(device, portScore, `Suspicious port ${flow.destPort}: ${portCheck.reason}`);
                                 console.log(`[Suricata] evaluateForQuarantine result: ${result}`);
                             } catch (err) {
                                 console.error(`[Suricata] Auto-quarantine error:`, err);
                             }
+                        } else {
+                            console.log(`[Suricata] Port severity "${portCheck.severity}" is not "high", skipping auto-quarantine`);
                         }
                     }
                 }
